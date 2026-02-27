@@ -2,10 +2,10 @@
 const express = require("express");
 const router = express.Router();
 const { query } = require("../db/pool");
-const { authenticateToken, requireAdmin } = require("../middleware/auth");
+const { requireAuth, requireAdmin } = require("../middleware/auth");
 
 // GET /api/vouchers/:code — Validate a voucher code (authenticated users)
-router.get("/:code", authenticateToken, async (req, res) => {
+router.get("/:code", requireAuth, async (req, res) => {
   try {
     const { code } = req.params;
     const result = await query(
@@ -35,7 +35,7 @@ router.get("/:code", authenticateToken, async (req, res) => {
 });
 
 // POST /api/vouchers — Create voucher (admin only)
-router.post("/", authenticateToken, requireAdmin, async (req, res) => {
+router.post("/", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { code, type, discount_percent, description, max_uses, expires_at } = req.body;
 
@@ -54,7 +54,7 @@ router.post("/", authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/vouchers/:id/toggle — Activate/deactivate (admin only)
-router.patch("/:id/toggle", authenticateToken, requireAdmin, async (req, res) => {
+router.patch("/:id/toggle", requireAuth, requireAdmin, async (req, res) => {
   try {
     const result = await query(
       "UPDATE vouchers SET active = NOT active WHERE id = $1 RETURNING *",
@@ -67,7 +67,7 @@ router.patch("/:id/toggle", authenticateToken, requireAdmin, async (req, res) =>
 });
 
 // POST /api/vouchers/:code/redeem — Mark a voucher as used
-router.post("/:code/redeem", authenticateToken, async (req, res) => {
+router.post("/:code/redeem", requireAuth, async (req, res) => {
   try {
     const result = await query(
       "UPDATE vouchers SET uses = uses + 1 WHERE code = $1 AND active = true RETURNING *",
