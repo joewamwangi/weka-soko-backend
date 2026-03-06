@@ -273,3 +273,112 @@ router.get("/payments", async (req, res, next) => {
 });
 
 module.exports = router;
+
+// ── GET /api/admin/listings ───────────────────────────────────────────────────
+router.get("/listings", async (req, res, next) => {
+  try {
+    const { status, search, page = 1, limit = 50 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const conditions = []; const params = [];
+    if (status) { params.push(status); conditions.push(`l.status = $${params.length}`); }
+    if (search) { params.push(`%${search}%`); conditions.push(`(l.title ILIKE $${params.length} OR u.name ILIKE $${params.length})`); }
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    params.push(parseInt(limit), offset);
+    const { rows } = await query(
+      `SELECT l.*, u.name AS seller_name, u.email AS seller_email, u.phone AS seller_phone,
+              (SELECT COUNT(*) FROM payments p WHERE p.listing_id = l.id AND p.status='confirmed') AS payment_count
+       FROM listings l JOIN users u ON u.id = l.seller_id
+       ${where} ORDER BY l.created_at DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`, params
+    );
+    const { rows: countRows } = await query(`SELECT COUNT(*) FROM listings l JOIN users u ON u.id=l.seller_id ${where}`, params.slice(0, -2));
+    res.json({ listings: rows, total: parseInt(countRows[0].count) });
+  } catch (err) { next(err); }
+});
+
+// ── PATCH /api/admin/listings/:id ─────────────────────────────────────────────
+router.patch("/listings/:id", async (req, res, next) => {
+  try {
+    const { status, free_unlock } = req.body;
+    const updates = []; const params = [];
+    if (status) { params.push(status); updates.push(`status = $${params.length}`); }
+    if (free_unlock !== undefined) { params.push(!!free_unlock); updates.push(`is_unlocked = $${params.length}`); }
+    if (!updates.length) return res.status(400).json({ error: "Nothing to update" });
+    params.push(req.params.id);
+    const { rows } = await query(`UPDATE listings SET ${updates.join(", ")}, updated_at=NOW() WHERE id=$${params.length} RETURNING *`, params);
+    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ── DELETE /api/admin/listings/:id ────────────────────────────────────────────
+router.delete("/listings/:id", async (req, res, next) => {
+  try {
+    await query(`DELETE FROM listings WHERE id = $1`, [req.params.id]);
+    res.json({ message: "Listing deleted" });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/users/:id/free-unlock ─────────────────────────────────────
+router.post("/users/:id/free-unlock", async (req, res, next) => {
+  try {
+    await query(`UPDATE users SET free_unlock_approved=TRUE WHERE id=$1`, [req.params.id]);
+    res.json({ message: "Free unlock granted" });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/escrows/:id/approve ───────────────────────────────────────
+router.post("/escrows/:id/approve", async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `UPDATE escrows SET admin_approved=TRUE, approved_by=$1, approved_at=NOW() WHERE id=$2 RETURNING *`,
+      [req.user.id, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/escrows/:id/refund ────────────────────────────────────────
+router.post("/escrows/:id/refund", async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `UPDATE escrows SET status='refunded', released_at=NOW(), released_by=$1, notes='Admin refund' WHERE id=$2 RETURNING *`,
+      [req.user.id, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/admin/vouchers ───────────────────────────────────────────────────
+router.get("/vouchers", async (req, res, next) => {
+  try {
+    const { rows } = await query(`SELECT v.*, u.name AS created_by_name FROM vouchers v LEFT JOIN users u ON u.id=v.created_by ORDER BY v.created_at DESC`);
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/vouchers ──────────────────────────────────────────────────
+router.post("/vouchers", async (req, res, next) => {
+  try {
+    const { code, type, discount_percent, description, max_uses, expires_at } = req.body;
+    const finalCode = code || ("WS-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+    const { rows } = await query(
+      `INSERT INTO vouchers (code, type, discount_percent, description, max_uses, expires_at, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [finalCode, type || "unlock", discount_percent || 100, description, max_uses || 50, expires_at || null, req.user.id]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "Code already exists" });
+    next(err);
+  }
+});
+
+// ── PATCH /api/admin/vouchers/:id/toggle ──────────────────────────────────────
+router.patch("/vouchers/:id/toggle", async (req, res, next) => {
+  try {
+    const { rows } = await query(`UPDATE vouchers SET active=NOT active WHERE id=$1 RETURNING *`, [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
