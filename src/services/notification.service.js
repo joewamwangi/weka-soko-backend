@@ -124,9 +124,17 @@ async function sendWhatsApp(phone, message) {
 }
 
 async function sendEmail(to, name, subject, text) {
-  if (!process.env.SENDGRID_API_KEY) return;
+  if (!process.env.SENDGRID_API_KEY) {
+    console.warn("[Email] SENDGRID_API_KEY not set — skipping email to", to);
+    return;
+  }
+  const fromEmail = process.env.EMAIL_FROM || process.env.SENDGRID_FROM_EMAIL;
+  if (!fromEmail) {
+    console.warn("[Email] EMAIL_FROM not set — skipping email to", to);
+    return;
+  }
   try {
-    await fetch("https://api.sendgrid.com/v3/mail/send", {
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.SENDGRID_API_KEY}`,
@@ -134,11 +142,18 @@ async function sendEmail(to, name, subject, text) {
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to, name }] }],
-        from: { email: "noreply@wekasoko.co.ke", name: "Weka Soko" },
+        from: { email: fromEmail, name: "Weka Soko" },
+        reply_to: { email: fromEmail, name: "Weka Soko" },
         subject,
         content: [{ type: "text/plain", value: text }],
       }),
     });
+    if (!res.ok) {
+      const errBody = await res.text();
+      console.error("[Email] SendGrid rejected:", res.status, errBody);
+    } else {
+      console.log(`[Email] Sent to ${to} — "${subject}"`);
+    }
   } catch (err) {
     console.error("[Email] Send failed:", err.message);
   }
