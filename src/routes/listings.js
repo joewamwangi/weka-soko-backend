@@ -116,7 +116,26 @@ router.get("/seller/mine", requireAuth, requireSeller, async (req, res, next) =>
   } catch (err) { next(err); }
 });
 
-// ── GET /api/listings/counties ── (already above) ────────────────────────────
+// ── GET /api/listings/buyer/interests ─────────────────────────────────────────
+// Listings the buyer has locked in on
+router.get("/buyer/interests", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT l.*,
+        l.listing_anon_tag AS seller_anon,
+        CASE WHEN l.is_unlocked THEN u.name  ELSE NULL END AS seller_name,
+        CASE WHEN l.is_unlocked THEN u.phone ELSE NULL END AS seller_phone,
+        CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
+        COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+       FROM listings l
+       JOIN users u ON u.id=l.seller_id
+       WHERE l.locked_buyer_id=$1 AND l.status!='deleted'
+       ORDER BY l.locked_at DESC NULLS LAST`,
+      [req.user.id]
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
 
 // ── GET /api/listings/:id ─────────────────────────────────────────────────────
 router.get("/:id", optionalAuth, async (req, res, next) => {
@@ -287,12 +306,10 @@ router.post("/:id/report", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: "Valid reason required", validReasons });
     }
 
-    // Check listing exists
     const { rows: ls } = await query(`SELECT id,seller_id,title FROM listings WHERE id=$1 AND status!='deleted'`, [req.params.id]);
     if (!ls.length) return res.status(404).json({ error: "Listing not found" });
     if (ls[0].seller_id === req.user.id) return res.status(400).json({ error: "Cannot report your own listing" });
 
-    // Upsert — one report per user per listing
     await query(
       `INSERT INTO listing_reports (listing_id,reporter_id,reason,details)
        VALUES ($1,$2,$3,$4)
@@ -300,7 +317,6 @@ router.post("/:id/report", requireAuth, async (req, res, next) => {
       [req.params.id, req.user.id, reason, details||null]
     );
 
-    // Auto-flag listing after 5 reports
     const { rows: cnt } = await query(
       `SELECT COUNT(*) FROM listing_reports WHERE listing_id=$1 AND status='pending'`,
       [req.params.id]
@@ -309,7 +325,6 @@ router.post("/:id/report", requireAuth, async (req, res, next) => {
       await query(`UPDATE listings SET status='flagged' WHERE id=$1 AND status='active'`, [req.params.id]);
     }
 
-    // Notify admins
     await query(
       `INSERT INTO notifications (user_id,type,title,body,data)
        SELECT id,'listing_report','🚩 Listing Reported',$1,$2
@@ -325,7 +340,6 @@ router.post("/:id/report", requireAuth, async (req, res, next) => {
 });
 
 // ── DELETE /api/listings/:id/photos/:photoId ─────────────────────────────────
-// Seller removes a specific photo from their listing
 router.delete("/:id/photos/:photoId", requireAuth, requireSeller, async (req, res, next) => {
   try {
     const { rows: ls } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [req.params.id]);
@@ -335,7 +349,6 @@ router.delete("/:id/photos/:photoId", requireAuth, requireSeller, async (req, re
     const { rows: ph } = await query(`SELECT public_id FROM listing_photos WHERE id=$1 AND listing_id=$2`, [req.params.photoId, req.params.id]);
     if (!ph.length) return res.status(404).json({ error: "Photo not found" });
 
-    // Delete from Cloudinary if possible
     if (ph[0].public_id) {
       try { const { deleteByPublicId } = require("../services/cloudinary.service"); await deleteByPublicId(ph[0].public_id); } catch {}
     }
@@ -345,7 +358,6 @@ router.delete("/:id/photos/:photoId", requireAuth, requireSeller, async (req, re
 });
 
 // ── POST /api/listings/:id/photos ─────────────────────────────────────────────
-// Seller adds new photos to an existing listing
 router.post("/:id/photos", requireAuth, requireSeller, upload.array("photos", 8), async (req, res, next) => {
   try {
     const { rows: ls } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [req.params.id]);
@@ -353,7 +365,6 @@ router.post("/:id/photos", requireAuth, requireSeller, upload.array("photos", 8)
     if (ls[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });
     if (!req.files?.length) return res.status(400).json({ error: "No photos provided" });
 
-    // Get current max sort_order
     const { rows: maxRow } = await query(`SELECT COALESCE(MAX(sort_order),0) AS max FROM listing_photos WHERE listing_id=$1`, [req.params.id]);
     let sortStart = parseInt(maxRow[0].max) + 1;
 
@@ -369,7 +380,6 @@ router.post("/:id/photos", requireAuth, requireSeller, upload.array("photos", 8)
 });
 
 // ── GET /api/listings/sold ────────────────────────────────────────────────────
-// Public feed of sold items (showcase of successful transactions)
 router.get("/sold", optionalAuth, async (req, res, next) => {
   try {
     const { category, page = 1, limit = 20 } = req.query;
@@ -382,13 +392,11 @@ router.get("/sold", optionalAuth, async (req, res, next) => {
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
               l.view_count, l.interest_count, l.created_at, l.updated_at,
-              -- Show seller anon tag (never real identity on sold page)
               l.listing_anon_tag AS seller_anon,
               COALESCE(
                 (SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),
                 '[]'::json
               ) AS photos,
-              -- Review stats
               (SELECT ROUND(AVG(r.rating)::numeric,1) FROM reviews r WHERE r.listing_id=l.id) AS avg_rating,
               (SELECT COUNT(*) FROM reviews r WHERE r.listing_id=l.id) AS review_count
        FROM listings l
@@ -403,10 +411,7 @@ router.get("/sold", optionalAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-module.exports = router;
-
 // ── GET /api/listings/sold/all ────────────────────────────────────────────────
-// Public sold listings feed (marketplace transparency — shows what's been traded)
 router.get("/sold/all", async (req, res, next) => {
   try {
     const { page=1, limit=20, category } = req.query;
@@ -431,7 +436,6 @@ router.get("/sold/all", async (req, res, next) => {
 });
 
 // ── GET /api/listings/seller/sold ─────────────────────────────────────────────
-// Seller's own sold listings
 router.get("/seller/sold", requireAuth, requireSeller, async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -447,3 +451,5 @@ router.get("/seller/sold", requireAuth, requireSeller, async (req, res, next) =>
     res.json(rows);
   } catch (err) { next(err); }
 });
+
+module.exports = router;
