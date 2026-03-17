@@ -1,7 +1,12 @@
 const { OpenAI } = require("openai");
 const { query } = require("../db/pool");
 
-const openai = new OpenAI();
+let openai;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+} else {
+  console.warn("⚠️ OPENAI_API_KEY is missing. AI moderation is disabled. Falling back to regex.");
+}
 
 // src/services/moderation.service.js — Weka Soko Contact Info Moderation Engine
 // Covers every known method users attempt to share contact info before unlock
@@ -245,6 +250,9 @@ function scanListingForContact(listing) {
 
 // ── Severity escalation ───────────────────────────────────────────────────────
 async function detectContactInfoAI(text) {
+  if (!openai) {
+    return detectContactInfo(text);
+  }
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
