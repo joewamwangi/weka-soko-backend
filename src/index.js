@@ -22,7 +22,7 @@ const { sendEmail } = require("./services/email.service");
 const statsRoutes = require("./routes/stats");
 const voucherRoutes = require("./routes/vouchers");
 const reviewRoutes = require("./routes/reviews");
-const requestRoutes = require("./routes/requests");
+const moderationRoutes = require("./routes/admin_moderation");
 
 const app = express();
 const server = http.createServer(app);
@@ -470,12 +470,13 @@ app.use("/api/listings", listingRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/chat", chatRoutes);
 adminRoutes.setIO(io);
+app.set("io", io);
 app.use("/api/admin", adminRoutes);
+app.use("/api/admin/moderation", moderationRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/reviews", reviewRoutes);
-app.use("/api/requests", requestRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
