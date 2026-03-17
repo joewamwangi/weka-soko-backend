@@ -7,6 +7,9 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
+const xss = require("xss-clean");
+const hpp = require("hpp");
+const slowDown = require("express-slow-down");
 
 const { pool } = require("./db/pool");
 const { query } = require("./db/pool");
@@ -131,9 +134,19 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Per-socket message rate limiting: max 20 messages per minute
+  const msgTimestamps = [];
   socket.on("send_message", async ({ listingId, body }) => {
     try {
       if (!body?.trim() || body.length > 2000) return;
+      const now = Date.now();
+      // Purge timestamps older than 60s
+      while (msgTimestamps.length && msgTimestamps[0] < now - 60000) msgTimestamps.shift();
+      if (msgTimestamps.length >= 20) {
+        socket.emit("error", "You are sending messages too fast. Please slow down.");
+        return;
+      }
+      msgTimestamps.push(now);
 
       const { rows: listingRows } = await query(
         `SELECT seller_id, locked_buyer_id, is_unlocked FROM listings WHERE id = $1`,
@@ -377,30 +390,22 @@ app.use(helmet({
   },
   crossOriginEmbedderPolicy: false,
 }));
-// Prevent parameter pollution
+// ── XSS protection — sanitizes req.body, req.query, req.params
+app.use(xss());
+// ── HTTP Parameter Pollution protection
+app.use(hpp({
+  whitelist: ["status", "category", "county", "page", "limit", "search"],
+}));
+// ── SQL injection pattern detection (belt-and-suspenders — parameterised queries are primary defence)
 app.use((req, _res, next) => {
-  // Strip any duplicate query params that could cause HPP
-  if (req.query) {
-    for (const key of Object.keys(req.query)) {
-      if (Array.isArray(req.query[key])) req.query[key] = req.query[key][0];
-    }
-  }
-  next();
-});
-// Basic XSS sanitization on text body fields
-app.use((req, _res, next) => {
-  if (req.body && typeof req.body === "object") {
-    const sanitize = (val) => {
-      if (typeof val !== "string") return val;
-      return val.replace(/[<>]/g, (c) => (c === "<" ? "&lt;" : "&gt;"));
-    };
-    const sanitizeObj = (obj) => {
-      for (const k of Object.keys(obj)) {
-        if (typeof obj[k] === "string") obj[k] = sanitize(obj[k]);
-        else if (typeof obj[k] === "object" && obj[k] !== null) sanitizeObj(obj[k]);
-      }
-    };
-    sanitizeObj(req.body);
+  const sqlPattern = /((SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|EXEC|EXECUTE|TRUNCATE|REPLACE).*(FROM|INTO|WHERE|TABLE|DATABASE))|(-{2})|(\/\*.*\*\/)/gi;
+  const check = (val) => typeof val === "string" && sqlPattern.test(val);
+  const scanObj = (obj) => {
+    if (!obj || typeof obj !== "object") return false;
+    return Object.values(obj).some(v => check(v) || (typeof v === "object" && scanObj(v)));
+  };
+  if (scanObj(req.body) || scanObj(req.query)) {
+    return _res.status(400).json({ error: "Invalid characters in request" });
   }
   next();
 });
@@ -425,26 +430,38 @@ app.use(cors({
   credentials: true,
 }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "2mb" }));       // tight limit for JSON API requests
+app.use(express.urlencoded({ extended: true, limit: "10mb" })); // looser for multipart/file uploads
 
-// Global rate limiter
+// ── Global rate limiter — 200 req per 15 min per IP
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 min
-  max: 300,
+  windowMs: 15 * 60 * 1000,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again later." },
-  skip: (req) => req.path === "/health", // don't rate-limit health checks
+  skip: (req) => req.path === "/health",
+  keyGenerator: (req) => req.ip || req.headers["x-forwarded-for"] || "unknown",
 });
-// Slow down repeated auth failures
-const authSlowDown = rateLimit({
+
+// ── Speed limiter — starts adding delay after 50 req/15min (softens DDoS before hard block)
+const speedLimiter = slowDown({
   windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: "Too many failed attempts. Please slow down." },
+  delayAfter: 50,
+  delayMs: (hits) => (hits - 50) * 100, // +100ms per req above threshold, max ~5s
+  skip: (req) => req.path === "/health",
+});
+
+// ── Auth slow-down — penalises repeated login failures
+const authSlowDown = slowDown({
+  windowMs: 15 * 60 * 1000,
+  delayAfter: 5,
+  delayMs: (hits) => hits * 500, // 500ms, 1000ms, 1500ms...
   skipSuccessfulRequests: true,
 });
+
 app.use(globalLimiter);
+app.use(speedLimiter);
 
 // Stricter limiter for auth (login/register)
 const authLimiter = rateLimit({
