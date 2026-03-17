@@ -396,16 +396,29 @@ app.use(xss());
 app.use(hpp({
   whitelist: ["status", "category", "county", "page", "limit", "search"],
 }));
-// ── SQL injection pattern detection (belt-and-suspenders — parameterised queries are primary defence)
+// ── SQL injection pattern detection — only catches clear injection attempts, not normal text
+// Primary defence is always parameterised queries; this is belt-and-suspenders for obvious attacks
 app.use((req, _res, next) => {
-  const sqlPattern = /((SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|EXEC|EXECUTE|TRUNCATE|REPLACE).*(FROM|INTO|WHERE|TABLE|DATABASE))|(-{2})|(\/\*.*\*\/)/gi;
-  const check = (val) => typeof val === "string" && sqlPattern.test(val);
+  // Only flag patterns that look like real injection: SQL keyword + semicolon, 
+  // comment sequences, or UNION SELECT — not normal text containing SQL words
+  const injectionPatterns = [
+    /;\s*(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC|EXECUTE)\s/gi,  // ; DROP TABLE
+    /UNION\s+(ALL\s+)?SELECT/gi,                                // UNION SELECT
+    /\/\*.*\*\//g,                                              // /* */ comments
+    /--\s*$/mg,                                                 // trailing -- comments
+    /'\s*(OR|AND)\s+'?\d+'\s*=\s*'\d+/gi,                     // ' OR '1'='1
+    /'\s*(OR|AND)\s+'\w+'\s*=\s*'\w+/gi,                      // ' OR 'x'='x
+  ];
+  const check = (val) => {
+    if (typeof val !== "string" || val.length < 10) return false;
+    return injectionPatterns.some(p => { p.lastIndex = 0; return p.test(val); });
+  };
   const scanObj = (obj) => {
     if (!obj || typeof obj !== "object") return false;
     return Object.values(obj).some(v => check(v) || (typeof v === "object" && scanObj(v)));
   };
   if (scanObj(req.body) || scanObj(req.query)) {
-    return _res.status(400).json({ error: "Invalid characters in request" });
+    return _res.status(400).json({ error: "Invalid request content" });
   }
   next();
 });
