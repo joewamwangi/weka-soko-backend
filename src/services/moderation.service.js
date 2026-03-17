@@ -1,3 +1,8 @@
+const { OpenAI } = require("openai");
+const { query } = require("../db/pool");
+
+const openai = new OpenAI();
+
 // src/services/moderation.service.js — Weka Soko Contact Info Moderation Engine
 // Covers every known method users attempt to share contact info before unlock
 
@@ -239,10 +244,40 @@ function scanListingForContact(listing) {
 }
 
 // ── Severity escalation ───────────────────────────────────────────────────────
+async function detectContactInfoAI(text) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are an AI assistant designed to detect attempts to share contact information (phone numbers, emails, social media handles, physical addresses, or invitations to move off-platform) in chat messages. Respond with \'YES\' if contact information is detected, and \'NO\' otherwise. Be strict in your detection, even for \'sneaky\' attempts (e.g., \'zero seven one two...\', \'email at gmail dot com\', \'fb.me/user\', \'meet me at [address]\')."
+        },
+        {
+          role: "user",
+          content: `Analyze the following message for contact information sharing: \"${text}\"`
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 5,
+    });
+
+    const result = response.choices[0].message.content.trim().toUpperCase();
+    if (result === "YES") {
+      return { blocked: true, reason: "AI detected contact info", patternId: "ai_contact_info" };
+    }
+    return { blocked: false };
+  } catch (error) {
+    console.error("AI moderation error:", error);
+    // Fallback to existing regex detection if AI fails
+    return detectContactInfo(text);
+  }
+}
+
 function getSeverity(violationCount) {
   if (violationCount >= 3) return "suspended";
   if (violationCount >= 2) return "flagged";
   return "warning";
 }
 
-module.exports = { detectContactInfo, detectListingContactInfo, scanListingForContact, getSeverity };
+module.exports = { detectContactInfo, detectListingContactInfo, scanListingForContact, getSeverity, detectContactInfoAI };
