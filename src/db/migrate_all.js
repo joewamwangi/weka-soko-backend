@@ -14,6 +14,7 @@ async function runMigration() {
     // ── Enums ─────────────────────────────────────────────────────────────────
     await client.query(`DO $$ BEGIN CREATE TYPE user_role AS ENUM ('buyer','seller','admin'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
     await client.query(`DO $$ BEGIN CREATE TYPE violation_severity AS ENUM ('warning','flagged','suspended'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
+    await client.query(`DO $$ BEGIN CREATE TYPE listing_status AS ENUM ('active', 'locked', 'sold', 'deleted', 'pending_review'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
 
     // ── USERS ─────────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS users (
@@ -74,7 +75,7 @@ async function runMigration() {
       price NUMERIC(12,2) NOT NULL,
       location VARCHAR(255),
       county VARCHAR(60),
-      status VARCHAR(30) DEFAULT 'active',
+      status VARCHAR(30) DEFAULT 'pending_review',
       is_unlocked BOOLEAN DEFAULT FALSE,
       locked_buyer_id UUID REFERENCES users(id) ON DELETE SET NULL,
       locked_at TIMESTAMPTZ,
@@ -100,6 +101,23 @@ async function runMigration() {
     await addCol("listings","moderation_note","TEXT");
     await addCol("listings","moderation_reviewed_at","TIMESTAMPTZ");
     await addCol("listings","moderation_reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
+
+    // ── BUYER REQUESTS (What Buyers Want) ─────────────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS buyer_requests (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title VARCHAR(120) NOT NULL,
+      description TEXT NOT NULL,
+      budget NUMERIC(12,2),
+      county VARCHAR(60),
+      status VARCHAR(20) DEFAULT 'active',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );`);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_user ON buyer_requests(user_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_status ON buyer_requests(status)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_county ON buyer_requests(county)`).catch(()=>{});
 
     // Backfill expires_at for existing listings that don't have one
     await client.query(`UPDATE listings SET expires_at = created_at + INTERVAL '75 days' WHERE expires_at IS NULL`).catch(()=>{});
