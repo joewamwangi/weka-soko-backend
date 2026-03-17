@@ -120,6 +120,15 @@ async function runMigration() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_status ON buyer_requests(status)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_county ON buyer_requests(county)`).catch(()=>{});
 
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_threads_listing_buyer ON chat_threads(listing_id, buyer_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_threads_seller ON chat_threads(seller_id)`).catch(()=>{});
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_sender ON chat_messages(chat_thread_id, sender_id)`).catch(()=>{});
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_violations_sender_id ON chat_violations(sender_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_violations_chat_thread_id ON chat_violations(chat_thread_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_violations_status ON chat_violations(status)`).catch(()=>{});
+
     // Backfill expires_at for existing listings that don't have one
     await client.query(`UPDATE listings SET expires_at = created_at + INTERVAL '75 days' WHERE expires_at IS NULL`).catch(()=>{});
 
@@ -211,12 +220,22 @@ async function runMigration() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
+    // ── CHAT THREADS ──────────────────────────────────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS chat_threads (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      buyer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      seller_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(listing_id, buyer_id)
+    );`);
+
     // ── CHAT MESSAGES ─────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS chat_messages (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      chat_thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
       sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      receiver_id UUID REFERENCES users(id) ON DELETE SET NULL,
       body TEXT NOT NULL,
       is_blocked BOOLEAN DEFAULT FALSE,
       block_reason TEXT,
@@ -225,13 +244,17 @@ async function runMigration() {
     );`);
 
     // ── CHAT VIOLATIONS ───────────────────────────────────────────────────────
+    await client.query(`DROP TABLE IF EXISTS chat_violations;`); -- Drop if exists to ensure correct schema
     await client.query(`CREATE TABLE IF NOT EXISTS chat_violations (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-      listing_id UUID REFERENCES listings(id) ON DELETE SET NULL,
-      message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
-      reason TEXT,
-      severity violation_severity DEFAULT 'warning',
+      sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      chat_thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+      message_content TEXT NOT NULL,
+      violation_type VARCHAR(50) NOT NULL, -- e.g., 'contact_info', 'profanity'
+      reason TEXT, -- Detailed reason for blocking
+      reviewed_by UUID REFERENCES users(id),
+      reviewed_at TIMESTAMPTZ,
+      status VARCHAR(20) DEFAULT 'pending', -- 'pending', 'resolved', 'dismissed'
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
@@ -303,6 +326,15 @@ async function runMigration() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_user ON buyer_requests(user_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_status ON buyer_requests(status)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_county ON buyer_requests(county)`).catch(()=>{});
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_threads_listing_buyer ON chat_threads(listing_id, buyer_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_threads_seller ON chat_threads(seller_id)`).catch(()=>{});
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_sender ON chat_messages(chat_thread_id, sender_id)`).catch(()=>{});
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_violations_sender_id ON chat_violations(sender_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_violations_chat_thread_id ON chat_violations(chat_thread_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_violations_status ON chat_violations(status)`).catch(()=>{});
 
     // ── INDEXES ───────────────────────────────────────────────────────────────
     await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status)`).catch(()=>{});
