@@ -11,6 +11,46 @@ const xss = require("xss-clean");
 const hpp = require("hpp");
 const slowDown = require("express-slow-down");
 
+
+const { pool } = require("./db/pool");
+const { query } = require("./db/pool");
+const { startCronJobs } = require("./services/cron.service");
+
+
+const authRoutes = require("./routes/auth");
+const listingRoutes = require("./routes/listings");
+const paymentRoutes = require("./routes/payments");
+const chatRoutes = require("./routes/chat");
+const adminRoutes = require("./routes/admin");
+const notificationRoutes = require("./routes/notifications");
+const { sendEmail } = require("./services/email.service");
+const statsRoutes = require("./routes/stats");
+const voucherRoutes = require("./routes/vouchers");
+const reviewRoutes = require("./routes/reviews");
+const requestsRoutes = require("./routes/requests");
+
+
+const app = express();
+const server = http.createServer(app);
+
+
+// ── Socket.io Setup ─────────────────────────────────────────────────────
+const io = new Server(server, {
+  cors: {
+    origin: function(origin, callback) {
+      if (!origin) return callback(null, true);// src/index.js — Weka Soko Backend Entry Point
+require("dotenv").config();
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const cors = require("cors");
+const helmet = require("helmet");
+const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
+const xss = require("xss-clean");
+const hpp = require("hpp");
+const slowDown = require("express-slow-down");
+
 const { pool } = require("./db/pool");
 const { query } = require("./db/pool");
 const { startCronJobs } = require("./services/cron.service");
@@ -277,6 +317,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/requests", requestsRoutes);
 
 // ── Health Check ────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
