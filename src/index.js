@@ -493,11 +493,22 @@ const forgotLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+// Strict limiter for M-Pesa STK push — prevent abuse of payment initiation
+const mpesaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 3,
+  message: { error: "Too many payment attempts. Please wait a minute before trying again." },
+  keyGenerator: (req) => req.user?.id || req.ip || "unknown",
+  skip: (req) => !req.user,
+});
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api/auth/forgot-password", forgotLimiter);
 app.use("/api/auth/login", authSlowDown);
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/listings", listingRoutes);
+app.use("/api/payments/unlock", mpesaLimiter);
+app.use("/api/payments/escrow", mpesaLimiter);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/chat", chatRoutes);
 adminRoutes.setIO(io);
