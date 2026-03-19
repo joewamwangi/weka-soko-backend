@@ -135,12 +135,12 @@ router.get("/verify-email", async (req, res, next) => {
       `UPDATE users SET is_verified=TRUE, email_verify_token=NULL, email_verify_expires=NULL WHERE id=$1`,
       [user.id]
     );
-    // Return a token so the frontend can log them in automatically
+    // Return a JWT so the frontend can log them in automatically
     const { rows: fresh } = await query(
       `SELECT id,name,email,role,anon_tag,is_verified FROM users WHERE id=$1`, [user.id]
     );
-    const token = signToken(fresh[0]);
-    res.json({ ok: true, message: "Email verified! You can now sign in.", token, user: fresh[0] });
+    const jwt = signToken(fresh[0]);
+    res.json({ ok: true, message: "Email verified! You can now sign in.", token: jwt, user: fresh[0] });
   } catch (err) { next(err); }
 });
 
