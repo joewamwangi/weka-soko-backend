@@ -458,58 +458,81 @@ router.delete("/users/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
     if (id === req.user.id) return res.status(400).json({ error: "Cannot delete your own account" });
-
-    // Collect Cloudinary public_ids BEFORE deleting rows
-    const { rows: photoRows } = await query(
-      `SELECT lp.public_id FROM listing_photos lp
-       JOIN listings l ON l.id = lp.listing_id
-       WHERE l.seller_id=$1 AND lp.public_id IS NOT NULL`, [id]
-    ).catch(() => ({ rows: [] }));
-
-    // Nullify FK refs that must stay
-    await query(`UPDATE payments SET payer_id=NULL WHERE payer_id=$1`, [id]).catch(()=>{});
-    await query(`UPDATE escrows SET approved_by=NULL WHERE approved_by=$1`, [id]).catch(()=>{});
-    await query(`UPDATE escrows SET released_by=NULL WHERE released_by=$1`, [id]).catch(()=>{});
-    await query(`UPDATE disputes SET resolved_by=NULL WHERE resolved_by=$1`, [id]).catch(()=>{});
-    await query(`UPDATE listings SET locked_buyer_id=NULL,locked_at=NULL WHERE locked_buyer_id=$1`, [id]).catch(()=>{});
-    await query(`UPDATE listings SET reviewed_by=NULL WHERE reviewed_by=$1`, [id]).catch(()=>{});
-    await query(`UPDATE chat_violations SET reviewed_by=NULL WHERE reviewed_by=$1`, [id]).catch(()=>{});
-    await query(`UPDATE vouchers SET created_by=NULL WHERE created_by=$1`, [id]).catch(()=>{});
-    // Payments & escrows
-    await query(`DELETE FROM payments WHERE listing_id IN (SELECT id FROM listings WHERE seller_id=$1)`, [id]).catch(()=>{});
-    await query(`DELETE FROM disputes WHERE escrow_id IN (SELECT id FROM escrows WHERE buyer_id=$1 OR seller_id=$1)`, [id]).catch(()=>{});
-    await query(`DELETE FROM escrows WHERE buyer_id=$1 OR seller_id=$1`, [id]).catch(()=>{});
-    // Reviews, pitches, requests
-    await query(`DELETE FROM reviews WHERE reviewer_id=$1 OR reviewee_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM seller_pitches WHERE seller_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM seller_pitches WHERE request_id IN (SELECT id FROM buyer_requests WHERE user_id=$1)`, [id]).catch(()=>{});
-    await query(`DELETE FROM buyer_requests WHERE user_id=$1`, [id]).catch(()=>{});
-    // Reports
-    await query(`DELETE FROM listing_reports WHERE reporter_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM listing_reports WHERE listing_id IN (SELECT id FROM listings WHERE seller_id=$1)`, [id]).catch(()=>{});
-    // Chat
-    await query(`DELETE FROM chat_messages WHERE sender_id=$1 OR receiver_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM chat_violations WHERE user_id=$1`, [id]).catch(()=>{});
-    // Listing photos & listings
-    await query(`DELETE FROM listing_photos WHERE listing_id IN (SELECT id FROM listings WHERE seller_id=$1)`, [id]).catch(()=>{});
-    await query(`DELETE FROM listings WHERE seller_id=$1`, [id]).catch(()=>{});
-    // Everything else
-    await query(`DELETE FROM notifications WHERE user_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM password_history WHERE user_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM password_resets WHERE user_id=$1`, [id]).catch(()=>{});
-    await query(`DELETE FROM users WHERE id=$1`, [id]);
-
-    // Purge Cloudinary images — non-fatal
-    if (photoRows.length > 0) {
-      try {
-        const { deleteByPublicId } = require("../services/cloudinary.service");
-        await Promise.allSettled(photoRows.map(r => deleteByPublicId(r.public_id)));
-      } catch (e) { console.warn("[Admin delete user] Cloudinary cleanup:", e.message); }
-    }
-
+    await purgeUser(id);
     res.json({ message: "User and all data permanently deleted" });
-  } catch (err) { next(err); }
+  } catch (err) { console.error("[Admin delete user FATAL]", err.message); next(err); }
 });
+
+// ── Shared nuclear delete — handles any schema version ────────────────────────
+async function purgeUser(uid) {
+  // Step 1: collect Cloudinary IDs before any rows vanish
+  const { rows: photoRows } = await query(
+    `SELECT lp.public_id FROM listing_photos lp
+     JOIN listings l ON l.id = lp.listing_id
+     WHERE l.seller_id=$1 AND lp.public_id IS NOT NULL`, [uid]
+  ).catch(() => ({ rows: [] }));
+
+  // Step 2: dynamically nullify EVERY FK in the entire DB pointing at users(id)
+  // This handles any schema version including old columns like moderation_reviewed_by
+  const { rows: fkRefs } = await query(`
+    SELECT tc.table_name, kcu.column_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+      AND tc.table_schema = kcu.table_schema
+    JOIN information_schema.referential_constraints rc
+      ON tc.constraint_name = rc.constraint_name
+      AND tc.table_schema = rc.constraint_schema
+    JOIN information_schema.key_column_usage ccu
+      ON rc.unique_constraint_name = ccu.constraint_name
+      AND rc.unique_constraint_schema = ccu.table_schema
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND ccu.table_name = 'users'
+      AND ccu.column_name = 'id'
+      AND tc.table_name != 'users'
+  `).catch(() => ({ rows: [] }));
+
+  for (const { table_name, column_name } of fkRefs) {
+    await query(
+      `UPDATE ${table_name} SET ${column_name}=NULL WHERE ${column_name}=$1`,
+      [uid]
+    ).catch(e => console.warn(`[purgeUser] nullify ${table_name}.${column_name}:`, e.message));
+  }
+
+  // Step 3: delete child rows in FK-safe order
+  const steps = [
+    `DELETE FROM payments WHERE listing_id IN (SELECT id FROM listings WHERE seller_id=$1)`,
+    `DELETE FROM disputes WHERE escrow_id IN (SELECT id FROM escrows WHERE buyer_id=$1 OR seller_id=$1)`,
+    `DELETE FROM escrows WHERE buyer_id=$1 OR seller_id=$1`,
+    `DELETE FROM reviews WHERE reviewer_id=$1 OR reviewee_id=$1`,
+    `DELETE FROM seller_pitches WHERE seller_id=$1`,
+    `DELETE FROM seller_pitches WHERE request_id IN (SELECT id FROM buyer_requests WHERE user_id=$1)`,
+    `DELETE FROM buyer_requests WHERE user_id=$1`,
+    `DELETE FROM listing_reports WHERE reporter_id=$1`,
+    `DELETE FROM listing_reports WHERE listing_id IN (SELECT id FROM listings WHERE seller_id=$1)`,
+    `DELETE FROM chat_messages WHERE sender_id=$1 OR receiver_id=$1`,
+    `DELETE FROM chat_violations WHERE user_id=$1`,
+    `DELETE FROM listing_photos WHERE listing_id IN (SELECT id FROM listings WHERE seller_id=$1)`,
+    `DELETE FROM listings WHERE seller_id=$1`,
+    `DELETE FROM notifications WHERE user_id=$1`,
+    `DELETE FROM password_history WHERE user_id=$1`,
+    `DELETE FROM password_resets WHERE user_id=$1`,
+  ];
+  for (const sql of steps) {
+    await query(sql, [uid]).catch(e => console.warn(`[purgeUser] ${sql.slice(0,50)}:`, e.message));
+  }
+
+  // Step 4: delete the user
+  await query(`DELETE FROM users WHERE id=$1`, [uid]);
+
+  // Step 5: purge Cloudinary — outside DB, non-fatal
+  if (photoRows.length > 0) {
+    try {
+      const { deleteByPublicId } = require("../services/cloudinary.service");
+      await Promise.allSettled(photoRows.map(r => deleteByPublicId(r.public_id)));
+    } catch (e) { console.warn("[purgeUser] Cloudinary:", e.message); }
+  }
+}
 
 // ── Admin Invite System ───────────────────────────────────────────────────────
 router.get("/admins", async (req, res, next) => {
