@@ -2,6 +2,7 @@
 const express = require("express");
 const { query } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
+const { deleteUserCompletely } = require("../services/deleteUser");
 const router = express.Router();
 
 let _io = null;
@@ -458,16 +459,7 @@ router.delete("/users/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
     if (id === req.user.id) return res.status(400).json({ error: "Cannot delete your own account" });
-    await query(`UPDATE payments SET payer_id = NULL WHERE payer_id = $1`, [id]).catch(()=>{});
-    await query(`UPDATE escrows SET approved_by = NULL WHERE approved_by = $1`, [id]).catch(()=>{});
-    await query(`UPDATE escrows SET released_by = NULL WHERE released_by = $1`, [id]).catch(()=>{});
-    await query(`UPDATE disputes SET resolved_by = NULL WHERE resolved_by = $1`, [id]).catch(()=>{});
-    await query(`UPDATE listings SET locked_buyer_id = NULL WHERE locked_buyer_id = $1`, [id]).catch(()=>{});
-    await query(`DELETE FROM chat_messages WHERE sender_id = $1 OR receiver_id = $1`, [id]).catch(()=>{});
-    await query(`DELETE FROM chat_violations WHERE user_id = $1`, [id]).catch(()=>{});
-    await query(`DELETE FROM notifications WHERE user_id = $1`, [id]).catch(()=>{});
-    await query(`DELETE FROM listings WHERE seller_id = $1`, [id]);
-    await query(`DELETE FROM users WHERE id = $1`, [id]);
+    await deleteUserCompletely(id);
     res.json({ message: "User and all data permanently deleted" });
   } catch (err) { next(err); }
 });
