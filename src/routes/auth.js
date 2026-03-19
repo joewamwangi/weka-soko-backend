@@ -146,7 +146,20 @@ router.post(
       if (user.is_suspended) return res.status(403).json({ error: "Account suspended. Contact support@wekasoko.co.ke" });
 
       const valid = await bcrypt.compare(password, user.password_hash);
-      if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+      if (!valid) {
+        // Check if this matches a previously reset (old) password
+        const { rows: oldHashes } = await query(
+          `SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5`,
+          [user.id]
+        );
+        const matchesOld = await Promise.all(
+          oldHashes.map(r => bcrypt.compare(password, r.password_hash))
+        );
+        if (matchesOld.some(Boolean)) {
+          return res.status(401).json({ error: "This password was reset. Please use your new password or request another reset." });
+        }
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
 
       delete user.password_hash;
       delete user.account_status;
@@ -312,6 +325,29 @@ router.post("/reset-password", async (req, res, next) => {
     if (reset.used) return res.status(400).json({ error: "This reset link has already been used" });
     if (new Date(reset.expires_at) < new Date()) {
       return res.status(400).json({ error: "Reset link expired. Please request a new one." });
+    }
+
+    // ── Check against password history ──────────────────────────────────────
+    // Fetch the current password + last 5 historical hashes for this user
+    const { rows: histRows } = await query(
+      `SELECT password_hash FROM users WHERE id=$1
+       UNION ALL
+       SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5`,
+      [reset.user_id]
+    );
+    for (const row of histRows) {
+      if (row.password_hash && await bcrypt.compare(password, row.password_hash)) {
+        return res.status(400).json({ error: "You have used this password before. Please choose a different password." });
+      }
+    }
+
+    // Save current password to history before overwriting
+    const { rows: curUser } = await query(`SELECT password_hash FROM users WHERE id=$1`, [reset.user_id]);
+    if (curUser[0]?.password_hash) {
+      await query(
+        `INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)`,
+        [reset.user_id, curUser[0].password_hash]
+      ).catch(() => {}); // non-fatal
     }
 
     const hash = await bcrypt.hash(password, 12);
