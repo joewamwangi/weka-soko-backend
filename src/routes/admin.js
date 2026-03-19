@@ -16,13 +16,19 @@ router.use(requireAuth, requireAdmin);
 // ── GET /api/admin/stats ──────────────────────────────────────────────────────
 router.get("/stats", async (req, res, next) => {
   try {
-    const [listings, users, payments, violations, escrows, disputes] = await Promise.all([
+    const [listings, users, payments, violations, escrows, disputes, soldChannels] = await Promise.all([
       query(`SELECT COUNT(*) FILTER (WHERE status = 'active') AS active, COUNT(*) FILTER (WHERE status = 'sold') AS sold, COUNT(*) FILTER (WHERE status = 'locked') AS locked, COUNT(*) AS total FROM listings`),
       query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE role = 'seller') AS sellers, COUNT(*) FILTER (WHERE role = 'buyer') AS buyers, COUNT(*) FILTER (WHERE is_suspended = TRUE) AS suspended FROM users`),
       query(`SELECT COUNT(*) FILTER (WHERE type = 'unlock' AND status = 'confirmed') AS unlock_count, SUM(amount_kes) FILTER (WHERE type = 'unlock' AND status = 'confirmed') AS unlock_revenue, SUM(amount_kes) FILTER (WHERE type = 'escrow' AND status = 'confirmed') AS escrow_volume, COUNT(*) FILTER (WHERE type = 'escrow' AND status = 'confirmed') AS escrow_count FROM payments`),
       query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE severity = 'warning') AS warnings, COUNT(*) FILTER (WHERE severity = 'flagged') AS flagged, COUNT(*) FILTER (WHERE severity = 'suspended') AS suspended, COUNT(*) FILTER (WHERE reviewed = FALSE) AS unreviewed FROM chat_violations`),
       query(`SELECT COUNT(*) FILTER (WHERE status = 'holding') AS active FROM escrows`).catch(() => ({ rows: [{ active: 0 }] })),
       query(`SELECT COUNT(*) FILTER (WHERE status = 'open') AS open FROM disputes`).catch(() => ({ rows: [{ open: 0 }] })),
+      query(`SELECT
+        COUNT(*) FILTER (WHERE status='sold') AS total_sold,
+        COUNT(*) FILTER (WHERE status='sold' AND sold_channel='platform') AS sold_on_platform,
+        COUNT(*) FILTER (WHERE status='sold' AND sold_channel='outside') AS sold_outside,
+        COUNT(*) FILTER (WHERE status='sold' AND sold_channel IS NULL) AS sold_channel_unknown
+        FROM listings`).catch(() => ({ rows: [{ total_sold:0, sold_on_platform:0, sold_outside:0, sold_channel_unknown:0 }] })),
     ]);
     res.json({
       listings: listings.rows[0],
@@ -31,6 +37,7 @@ router.get("/stats", async (req, res, next) => {
       violations: violations.rows[0],
       escrows: escrows.rows[0],
       disputes: disputes.rows[0],
+      soldChannels: soldChannels.rows[0],
     });
   } catch (err) { next(err); }
 });
@@ -388,10 +395,11 @@ router.get("/sold", async (req, res, next) => {
     const { page=1, limit=30 } = req.query;
     const offset = (parseInt(page)-1)*parseInt(limit);
     const { rows } = await query(
-      `SELECT l.id, l.title, l.category, l.price, l.status, l.updated_at AS sold_at,
+      `SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel, l.sold_at,
+       COALESCE(l.sold_at, l.updated_at) AS sold_at,
        u.name AS seller_name, u.email AS seller_email, u2.name AS buyer_name, u2.email AS buyer_email
        FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
-       WHERE l.status='sold' ORDER BY l.updated_at DESC LIMIT $1 OFFSET $2`, [parseInt(limit), offset]
+       WHERE l.status='sold' ORDER BY COALESCE(l.sold_at, l.updated_at) DESC LIMIT $1 OFFSET $2`, [parseInt(limit), offset]
     );
     const { rows: cnt } = await query(`SELECT COUNT(*) FROM listings WHERE status='sold'`);
     res.json({ listings: rows, total: parseInt(cnt[0].count) });
