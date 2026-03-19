@@ -7,7 +7,7 @@ const { query } = require("../db/pool");
 router.get("/", async (req, res) => {
   try {
     const [users, listings, sold, revenue, views, interested] = await Promise.all([
-      query(`SELECT COUNT(*) AS count FROM users WHERE account_status IS DISTINCT FROM 'deleted' AND is_suspended = FALSE`),
+      query(`SELECT COUNT(*) AS count FROM users WHERE account_status IS DISTINCT FROM 'deleted' AND is_suspended = FALSE AND role != 'admin'`),
       query(`SELECT COUNT(*) AS count FROM listings WHERE status = 'active'`),
       query(`SELECT COUNT(*) AS count FROM listings WHERE status = 'sold'`),
       query(`SELECT COALESCE(SUM(amount_kes),0) AS total FROM payments WHERE status = 'confirmed'`),
