@@ -29,7 +29,7 @@ router.use(requireAuth, requireAdmin);
 // ── GET /api/admin/stats ──────────────────────────────────────────────────────
 router.get("/stats", async (req, res, next) => {
   try {
-    const [listings, users, payments, violations, escrows, disputes, soldChannels] = await Promise.all([
+    const [listings, users, payments, violations, escrows, disputes, soldChannels, requests] = await Promise.all([
       query(`SELECT COUNT(*) FILTER (WHERE status = 'active') AS active, COUNT(*) FILTER (WHERE status = 'sold') AS sold, COUNT(*) FILTER (WHERE status = 'locked') AS locked, COUNT(*) AS total FROM listings`),
       query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE role = 'seller') AS sellers, COUNT(*) FILTER (WHERE role = 'buyer') AS buyers, COUNT(*) FILTER (WHERE is_suspended = TRUE) AS suspended FROM users WHERE role != 'admin'`),
       query(`SELECT COUNT(*) FILTER (WHERE type = 'unlock' AND status = 'confirmed') AS unlock_count, SUM(amount_kes) FILTER (WHERE type = 'unlock' AND status = 'confirmed') AS unlock_revenue, SUM(amount_kes) FILTER (WHERE type = 'escrow' AND status = 'confirmed') AS escrow_volume, COUNT(*) FILTER (WHERE type = 'escrow' AND status = 'confirmed') AS escrow_count FROM payments`),
@@ -42,6 +42,7 @@ router.get("/stats", async (req, res, next) => {
         COUNT(*) FILTER (WHERE status='sold' AND sold_channel='outside') AS sold_outside,
         COUNT(*) FILTER (WHERE status='sold' AND sold_channel IS NULL) AS sold_channel_unknown
         FROM listings`).catch(() => ({ rows: [{ total_sold:0, sold_on_platform:0, sold_outside:0, sold_channel_unknown:0 }] })),
+      query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status='active') AS active FROM buyer_requests`).catch(() => ({ rows: [{ total: 0, active: 0 }] })),
     ]);
     res.json({
       listings: listings.rows[0],
@@ -51,6 +52,7 @@ router.get("/stats", async (req, res, next) => {
       escrows: escrows.rows[0],
       disputes: disputes.rows[0],
       soldChannels: soldChannels.rows[0],
+      requests: requests.rows[0],
     });
   } catch (err) { next(err); }
 });
@@ -402,15 +404,44 @@ router.patch("/vouchers/:id/toggle", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── GET /api/admin/requests ───────────────────────────────────────────────────
+router.get("/requests", async (req, res, next) => {
+  try {
+    const { page=1, limit=50, status } = req.query;
+    const offset = (parseInt(page)-1)*parseInt(limit);
+    const conditions = status ? [`r.status=$1`] : [];
+    const params = status ? [status, parseInt(limit), offset] : [parseInt(limit), offset];
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    const limitIdx = params.length - 1;
+    const offsetIdx = params.length;
+    const { rows } = await query(
+      `SELECT r.id, r.title, r.description, r.budget, r.county, r.status, r.created_at,
+              u.anon_tag AS requester_anon,
+              (SELECT COUNT(*) FROM seller_pitches sp WHERE sp.request_id=r.id) AS pitch_count
+       FROM buyer_requests r JOIN users u ON u.id=r.user_id
+       ${where} ORDER BY r.created_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params
+    );
+    const { rows: cnt } = await query(
+      `SELECT COUNT(*) FROM buyer_requests r ${where}`,
+      params.slice(0,-2)
+    );
+    res.json({ requests: rows, total: parseInt(cnt[0].count) });
+  } catch (err) { next(err); }
+});
+
 // ── GET /api/admin/sold ───────────────────────────────────────────────────────
 router.get("/sold", async (req, res, next) => {
   try {
     const { page=1, limit=30 } = req.query;
     const offset = (parseInt(page)-1)*parseInt(limit);
     const { rows } = await query(
-      `SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel, l.sold_at,
-       COALESCE(l.sold_at, l.updated_at) AS sold_at,
-       u.name AS seller_name, u.email AS seller_email, u2.name AS buyer_name, u2.email AS buyer_email
+      `SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel,
+       l.created_at, COALESCE(l.sold_at, l.updated_at) AS sold_at,
+       u.name AS seller_name, u.email AS seller_email,
+       u2.name AS buyer_name, u2.email AS buyer_email,
+       COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
        FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
        WHERE l.status='sold' ORDER BY COALESCE(l.sold_at, l.updated_at) DESC LIMIT $1 OFFSET $2`, [parseInt(limit), offset]
     );
