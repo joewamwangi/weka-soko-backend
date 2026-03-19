@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { body, validationResult } = require("express-validator");
 const { query, withTransaction } = require("../db/pool");
+const { deleteUserCompletely } = require("../services/deleteUser");
 const { requireAuth } = require("../middleware/auth");
 const { sendWelcomeMessage } = require("../services/notification.service");
 const { sendEmail } = require("../services/email.service");
@@ -235,21 +236,7 @@ router.patch("/role", requireAuth, async (req, res, next) => {
 // ── DELETE /api/auth/account ────────────────────────────────────────────────
 router.delete("/account", requireAuth, async (req, res, next) => {
   try {
-    const uid = req.user.id;
-    await withTransaction(async (client) => {
-      await client.query(`UPDATE payments SET payer_id=NULL WHERE payer_id=$1`, [uid]).catch(()=>{});
-      await client.query(`UPDATE escrows SET approved_by=NULL WHERE approved_by=$1`, [uid]).catch(()=>{});
-      await client.query(`UPDATE escrows SET released_by=NULL WHERE released_by=$1`, [uid]).catch(()=>{});
-      await client.query(`UPDATE disputes SET resolved_by=NULL WHERE resolved_by=$1`, [uid]).catch(()=>{});
-      await client.query(`UPDATE listings SET locked_buyer_id=NULL WHERE locked_buyer_id=$1`, [uid]).catch(()=>{});
-      await client.query(`DELETE FROM chat_messages WHERE sender_id=$1 OR receiver_id=$1`, [uid]);
-      await client.query(`DELETE FROM listing_reports WHERE reporter_id=$1`, [uid]).catch(()=>{});
-      await client.query(`DELETE FROM buyer_requests WHERE user_id=$1`, [uid]).catch(()=>{});
-      await client.query(`DELETE FROM listings WHERE seller_id=$1`, [uid]);
-      await client.query(`DELETE FROM chat_violations WHERE user_id=$1`, [uid]).catch(()=>{});
-      await client.query(`DELETE FROM notifications WHERE user_id=$1`, [uid]).catch(()=>{});
-      await client.query(`DELETE FROM users WHERE id=$1`, [uid]);
-    });
+    await deleteUserCompletely(req.user.id);
     res.json({ ok: true, message: "Account permanently deleted." });
   } catch (err) { console.error("[Delete account]", err.message); next(err); }
 });
