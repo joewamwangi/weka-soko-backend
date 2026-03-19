@@ -6,8 +6,21 @@ const router = express.Router();
 
 let _io = null;
 router.setIO = (io) => { _io = io; };
+let _sendPushToUser = null;
+function setPushSender(fn) { _sendPushToUser = fn; }
+router.setPushSender = setPushSender;
+
 function pushNotification(userId, notification) {
   if (_io) _io.to(`user:${userId}`).emit("notification", notification);
+  // Also send web push to device
+  if (_sendPushToUser) {
+    _sendPushToUser(userId, {
+      title: notification.title,
+      body: notification.body,
+      tag: notification.type || "admin",
+      url: "/"
+    }).catch(()=>{});
+  }
 }
 
 // All admin routes require auth + admin role
