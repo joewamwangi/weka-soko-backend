@@ -132,6 +132,19 @@ async function runMigration() {
       UNIQUE(listing_id, reporter_id)
     );`);
 
+    // ── PUSH SUBSCRIPTIONS ────────────────────────────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL,
+      p256dh TEXT,
+      auth TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(endpoint)
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)`).catch(()=>{});
+
     // ── PASSWORD HISTORY ─────────────────────────────────────────────────────
     // Stores old password hashes so users can't reuse them after a reset
     await client.query(`CREATE TABLE IF NOT EXISTS password_history (
