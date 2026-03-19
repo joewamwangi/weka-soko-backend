@@ -458,6 +458,10 @@ router.delete("/users/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
     if (id === req.user.id) return res.status(400).json({ error: "Cannot delete your own account" });
+    // Safety check — never delete another admin account via this route
+    const { rows: target } = await query(`SELECT role FROM users WHERE id=$1`, [id]);
+    if (!target.length) return res.status(404).json({ error: "User not found" });
+    if (target[0].role === "admin") return res.status(403).json({ error: "Admin accounts cannot be deleted here. Use the Team Management section." });
     await purgeUser(id);
     res.json({ message: "User and all data permanently deleted" });
   } catch (err) { console.error("[Admin delete user FATAL]", err.message); next(err); }
