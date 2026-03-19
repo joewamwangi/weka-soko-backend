@@ -7,9 +7,6 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
-const xss = require("xss-clean");
-const hpp = require("hpp");
-const slowDown = require("express-slow-down");
 
 const { pool } = require("./db/pool");
 const { query } = require("./db/pool");
@@ -25,8 +22,8 @@ const { sendEmail } = require("./services/email.service");
 const statsRoutes = require("./routes/stats");
 const voucherRoutes = require("./routes/vouchers");
 const reviewRoutes = require("./routes/reviews");
-const requestsRoutes = require("./routes/requests");
-const pitchesRoutes = require("./routes/pitches");
+const pushRoutes = require("./routes/push");
+const { sendPushToUser } = require("./routes/push");
 
 const app = express();
 const server = http.createServer(app);
@@ -82,7 +79,7 @@ io.on("connection", (socket) => {
   socket.on("join_listing", async (listingId) => {
     try {
       const { rows } = await query(
-        `SELECT seller_id, locked_buyer_id, is_contact_public, listing_anon_tag FROM listings WHERE id = $1`,
+        `SELECT seller_id, locked_buyer_id, is_unlocked, listing_anon_tag FROM listings WHERE id = $1`,
         [listingId]
       );
       if (!rows.length) return socket.emit("error", "Listing not found");
@@ -128,6 +125,12 @@ io.on("connection", (socket) => {
             body: `${buyerTag} opened a chat on your listing.`,
             data: { listing_id: listingId }
           });
+          // Web push to seller's device
+          sendPushToUser(listing.seller_id, {
+            title: "💬 Someone is interested!",
+            body: `${buyerTag} opened a chat on your listing.`,
+            tag: "chat_opened", url: "/"
+          }).catch(()=>{});
         }
       }
     } catch (err) {
@@ -136,29 +139,19 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Per-socket message rate limiting: max 20 messages per minute
-  const msgTimestamps = [];
   socket.on("send_message", async ({ listingId, body }) => {
     try {
       if (!body?.trim() || body.length > 2000) return;
-      const now = Date.now();
-      // Purge timestamps older than 60s
-      while (msgTimestamps.length && msgTimestamps[0] < now - 60000) msgTimestamps.shift();
-      if (msgTimestamps.length >= 20) {
-        socket.emit("error", "You are sending messages too fast. Please slow down.");
-        return;
-      }
-      msgTimestamps.push(now);
 
       const { rows: listingRows } = await query(
-        `SELECT seller_id, locked_buyer_id, is_contact_public FROM listings WHERE id = $1`,
+        `SELECT seller_id, locked_buyer_id, is_unlocked FROM listings WHERE id = $1`,
         [listingId]
       );
       if (!listingRows.length) return;
       const listing = listingRows[0];
 
-      // Moderation (only if contact info not yet revealed via payment)
-      if (!listing.is_contact_public) {
+      // Moderation (only if not yet unlocked)
+      if (!listing.is_unlocked) {
         const violation = detectContactInfo(body);
         if (violation.blocked) {
           const { rows: updated } = await query(
@@ -340,6 +333,12 @@ If you think this was a mistake, contact support@wekasoko.co.ke.
           body: `${socket.listingAnonTag || socket.user.anon_tag || "Someone"}: ${body.trim().slice(0, 60)}`,
           data: { listing_id: listingId },
         });
+        // Web push to recipient's device
+        sendPushToUser(actualNotifyId, {
+          title: "💬 New Message on Weka Soko",
+          body: `${socket.listingAnonTag || socket.user.anon_tag || "Someone"}: ${body.trim().slice(0, 80)}`,
+          tag: "new_message", url: "/"
+        }).catch(()=>{});
         // Send email notification
         query(`SELECT name, email FROM users WHERE id = $1`, [actualNotifyId]).then(r => {
           if (r.rows.length) {
@@ -392,35 +391,30 @@ app.use(helmet({
   },
   crossOriginEmbedderPolicy: false,
 }));
-// ── XSS protection — sanitizes req.body, req.query, req.params
-app.use(xss());
-// ── HTTP Parameter Pollution protection
-app.use(hpp({
-  whitelist: ["status", "category", "county", "page", "limit", "search"],
-}));
-// ── SQL injection pattern detection — only catches clear injection attempts, not normal text
-// Primary defence is always parameterised queries; this is belt-and-suspenders for obvious attacks
+// Prevent parameter pollution
 app.use((req, _res, next) => {
-  // Only flag patterns that look like real injection: SQL keyword + semicolon, 
-  // comment sequences, or UNION SELECT — not normal text containing SQL words
-  const injectionPatterns = [
-    /;\s*(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC|EXECUTE)\s/gi,  // ; DROP TABLE
-    /UNION\s+(ALL\s+)?SELECT/gi,                                // UNION SELECT
-    /\/\*.*\*\//g,                                              // /* */ comments
-    /--\s*$/mg,                                                 // trailing -- comments
-    /'\s*(OR|AND)\s+'?\d+'\s*=\s*'\d+/gi,                     // ' OR '1'='1
-    /'\s*(OR|AND)\s+'\w+'\s*=\s*'\w+/gi,                      // ' OR 'x'='x
-  ];
-  const check = (val) => {
-    if (typeof val !== "string" || val.length < 10) return false;
-    return injectionPatterns.some(p => { p.lastIndex = 0; return p.test(val); });
-  };
-  const scanObj = (obj) => {
-    if (!obj || typeof obj !== "object") return false;
-    return Object.values(obj).some(v => check(v) || (typeof v === "object" && scanObj(v)));
-  };
-  if (scanObj(req.body) || scanObj(req.query)) {
-    return _res.status(400).json({ error: "Invalid request content" });
+  // Strip any duplicate query params that could cause HPP
+  if (req.query) {
+    for (const key of Object.keys(req.query)) {
+      if (Array.isArray(req.query[key])) req.query[key] = req.query[key][0];
+    }
+  }
+  next();
+});
+// Basic XSS sanitization on text body fields
+app.use((req, _res, next) => {
+  if (req.body && typeof req.body === "object") {
+    const sanitize = (val) => {
+      if (typeof val !== "string") return val;
+      return val.replace(/[<>]/g, (c) => (c === "<" ? "&lt;" : "&gt;"));
+    };
+    const sanitizeObj = (obj) => {
+      for (const k of Object.keys(obj)) {
+        if (typeof obj[k] === "string") obj[k] = sanitize(obj[k]);
+        else if (typeof obj[k] === "object" && obj[k] !== null) sanitizeObj(obj[k]);
+      }
+    };
+    sanitizeObj(req.body);
   }
   next();
 });
@@ -445,38 +439,26 @@ app.use(cors({
   credentials: true,
 }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-app.use(express.json({ limit: "2mb" }));       // tight limit for JSON API requests
-app.use(express.urlencoded({ extended: true, limit: "10mb" })); // looser for multipart/file uploads
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// ── Global rate limiter — 200 req per 15 min per IP
+// Global rate limiter
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again later." },
-  skip: (req) => req.path === "/health",
-  keyGenerator: (req) => req.ip || req.headers["x-forwarded-for"] || "unknown",
+  skip: (req) => req.path === "/health", // don't rate-limit health checks
 });
-
-// ── Speed limiter — starts adding delay after 50 req/15min (softens DDoS before hard block)
-const speedLimiter = slowDown({
+// Slow down repeated auth failures
+const authSlowDown = rateLimit({
   windowMs: 15 * 60 * 1000,
-  delayAfter: 50,
-  delayMs: (hits) => (hits - 50) * 100, // +100ms per req above threshold, max ~5s
-  skip: (req) => req.path === "/health",
-});
-
-// ── Auth slow-down — penalises repeated login failures
-const authSlowDown = slowDown({
-  windowMs: 15 * 60 * 1000,
-  delayAfter: 5,
-  delayMs: (hits) => hits * 500, // 500ms, 1000ms, 1500ms...
+  max: 10,
+  message: { error: "Too many failed attempts. Please slow down." },
   skipSuccessfulRequests: true,
 });
-
 app.use(globalLimiter);
-app.use(speedLimiter);
 
 // Stricter limiter for auth (login/register)
 const authLimiter = rateLimit({
@@ -493,33 +475,21 @@ const forgotLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
-// Strict limiter for M-Pesa STK push — prevent abuse of payment initiation
-const mpesaLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 3,
-  message: { error: "Too many payment attempts. Please wait a minute before trying again." },
-  keyGenerator: (req) => req.user?.id || req.ip || "unknown",
-  skip: (req) => !req.user,
-});
-
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api/auth/forgot-password", forgotLimiter);
 app.use("/api/auth/login", authSlowDown);
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/listings", listingRoutes);
-app.use("/api/payments/unlock", mpesaLimiter);
-app.use("/api/payments/escrow", mpesaLimiter);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/chat", chatRoutes);
 adminRoutes.setIO(io);
-app.set("io", io);
+adminRoutes.setPushSender(sendPushToUser);
 app.use("/api/admin", adminRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/reviews", reviewRoutes);
-app.use("/api/requests", requestsRoutes);
-app.use("/api/pitches", pitchesRoutes);
+app.use("/api/push", pushRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
