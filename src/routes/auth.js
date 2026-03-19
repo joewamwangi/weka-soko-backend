@@ -151,7 +151,7 @@ router.post(
         const { rows: oldHashes } = await query(
           `SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5`,
           [user.id]
-        );
+        ).catch(() => ({ rows: [] })); // graceful if table doesn't exist yet
         const matchesOld = await Promise.all(
           oldHashes.map(r => bcrypt.compare(password, r.password_hash))
         );
@@ -328,13 +328,21 @@ router.post("/reset-password", async (req, res, next) => {
     }
 
     // ── Check against password history ──────────────────────────────────────
-    // Fetch the current password + last 5 historical hashes for this user
+    // Get current password hash
+    const { rows: curUser } = await query(`SELECT password_hash FROM users WHERE id=$1`, [reset.user_id]);
+    const currentHash = curUser[0]?.password_hash;
+
+    // Check if new password matches current password
+    if (currentHash && await bcrypt.compare(password, currentHash)) {
+      return res.status(400).json({ error: "You have used this password before. Please choose a different password." });
+    }
+
+    // Check against last 5 historical hashes
     const { rows: histRows } = await query(
-      `SELECT password_hash FROM users WHERE id=$1
-       UNION ALL
-       SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5`,
+      `SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5`,
       [reset.user_id]
-    );
+    ).catch(() => ({ rows: [] })); // graceful if table doesn't exist yet
+
     for (const row of histRows) {
       if (row.password_hash && await bcrypt.compare(password, row.password_hash)) {
         return res.status(400).json({ error: "You have used this password before. Please choose a different password." });
@@ -342,12 +350,11 @@ router.post("/reset-password", async (req, res, next) => {
     }
 
     // Save current password to history before overwriting
-    const { rows: curUser } = await query(`SELECT password_hash FROM users WHERE id=$1`, [reset.user_id]);
-    if (curUser[0]?.password_hash) {
+    if (currentHash) {
       await query(
         `INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)`,
-        [reset.user_id, curUser[0].password_hash]
-      ).catch(() => {}); // non-fatal
+        [reset.user_id, currentHash]
+      ).catch(() => {}); // non-fatal if table doesn't exist yet
     }
 
     const hash = await bcrypt.hash(password, 12);
