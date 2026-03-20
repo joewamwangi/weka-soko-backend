@@ -764,11 +764,49 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
     // Notify buyers with matching requests
     (async () => {
       try {
-        const { findMatchingRequests, notifyBuyerOfMatches } = require("../services/matching.service");
+        const { findMatchingRequests } = require("../services/matching.service");
         const matches = await findMatchingRequests(id);
         if (matches.length > 0) {
           for (const match of matches.slice(0, 3)) {
-            await notifyBuyerOfMatches(match.id, [listing], io);
+            const relevanceScore = Math.round(match.relevance_score);
+            const desc = (listing.description || "").substring(0, 70);
+            const notifBody = `"${listing.title}" (${listing.category}) matches your request. ${desc}... Relevance: ${relevanceScore}%`;
+            
+            await query(
+              `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, $2, $3, $4, $5)`,
+              [
+                match.user_id,
+                'listing_match',
+                'New listing matches your request!',
+                notifBody,
+                JSON.stringify({
+                  listing_id: id,
+                  request_id: match.id,
+                  relevance_score: relevanceScore,
+                  listing_title: listing.title,
+                  listing_description: listing.description,
+                  listing_category: listing.category,
+                  listing_price: listing.price
+                })
+              ]
+            ).catch(e => console.error("[Notification insert]", e));
+            
+            if (io) {
+              io.to(`user:${match.user_id}`).emit("notification", {
+                type: "listing_match",
+                title: "New listing matches your request!",
+                body: notifBody,
+                data: {
+                  listing_id: id,
+                  request_id: match.id,
+                  relevance_score: relevanceScore,
+                  listing_title: listing.title,
+                  listing_description: listing.description,
+                  listing_category: listing.category,
+                  listing_price: listing.price
+                }
+              });
+            }
           }
         }
       } catch(e) { console.error("[Admin Moderation] Error notifying buyers:", e); }
