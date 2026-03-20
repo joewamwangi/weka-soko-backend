@@ -138,7 +138,31 @@ function startCronJobs() {
     } catch (err) { console.error("[Cron] Payment cleanup:", err.message); }
   });
 
-  console.log("⏰ Cron jobs started: follow-ups | expiry | response-rates | escrow | payments");
+  // ── Delete listings without payment after 24 hours ──────────────────────────
+  cron.schedule("0 * * * *", async () => {
+    try {
+      const { rows: staleListings } = await query(`
+        SELECT l.id, l.seller_id, l.title FROM listings l
+        WHERE l.status = 'pending_review'
+        AND l.created_at < NOW() - INTERVAL '24 hours'
+        AND NOT EXISTS (
+          SELECT 1 FROM payments p 
+          WHERE p.listing_id = l.id 
+          AND p.type = 'unlock' 
+          AND p.status = 'confirmed'
+        )
+      `);
+      
+      if (staleListings.length > 0) {
+        for (const listing of staleListings) {
+          await query(`DELETE FROM listings WHERE id = $1`, [listing.id]);
+          console.log(`[Cron] Deleted unpaid listing ${listing.id} (${listing.title}) from seller ${listing.seller_id}`);
+        }
+      }
+    } catch (err) { console.error("[Cron] Unpaid listing cleanup:", err.message); }
+  });
+
+  console.log("⏰ Cron jobs started: follow-ups | expiry | response-rates | escrow | payments | unpaid-listings");
 }
 
 module.exports = { startCronJobs };
