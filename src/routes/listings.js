@@ -174,7 +174,7 @@ router.get("/sold/all", async (req, res, next) => {
 
 // ── GET /api/listings/admin/sold ──────────────────────────────────────────────
 // Admin only: Get all sold listings with seller and buyer info
-router.get("/admin/sold", requireAuth, requireAdmin, async (req, res, next) => {
+router.get("/admin/sold", requireAuth, async (req, res, next) => {
   try {
     const { q, page=1, limit=50 } = req.query;
     const offset = (parseInt(page)-1)*parseInt(limit);
