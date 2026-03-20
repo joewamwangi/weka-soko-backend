@@ -26,7 +26,7 @@ function pushNotification(userId, notification) {
 // All admin routes require auth + admin role
 router.use(requireAuth, requireAdmin);
 
-// ââ GET /api/admin/stats ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/stats Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/stats", async (req, res, next) => {
   try {
     const [listings, users, payments, violations, escrows, disputes, soldChannels, requests] = await Promise.all([
@@ -57,7 +57,7 @@ router.get("/stats", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/violations âââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/violations Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/violations", async (req, res, next) => {
   try {
     const { reviewed, severity } = req.query;
@@ -75,7 +75,7 @@ router.get("/violations", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/violations/:id/review ââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/violations/:id/review Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/violations/:id/review", async (req, res, next) => {
   try {
     const { action } = req.body;
@@ -86,11 +86,11 @@ router.post("/violations/:id/review", async (req, res, next) => {
     await query(`UPDATE chat_violations SET reviewed = TRUE WHERE id = $1`, [id]);
     if (action === "suspend") {
       await query(`UPDATE users SET is_suspended = TRUE WHERE id = $1`, [v.user_id]);
-      const notif = { type: "suspension", title: "ð« Account Suspended", body: "Your account has been suspended for violating our chat policies. Contact support@wekasoko.co.ke to appeal." };
+      const notif = { type: "suspension", title: "Ã°ÂÂÂ« Account Suspended", body: "Your account has been suspended for violating our chat policies. Contact support@wekasoko.co.ke to appeal." };
       await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)`, [v.user_id, notif.type, notif.title, notif.body]);
       pushNotification(v.user_id, notif);
     } else if (action === "warn") {
-      const notif = { type: "warning", title: "â ï¸ Account Warning", body: "You received a warning for attempting to share contact information in chat. Further violations may result in suspension." };
+      const notif = { type: "warning", title: "Ã¢ÂÂ Ã¯Â¸Â Account Warning", body: "You received a warning for attempting to share contact information in chat. Further violations may result in suspension." };
       await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)`, [v.user_id, notif.type, notif.title, notif.body]);
       pushNotification(v.user_id, notif);
     }
@@ -98,7 +98,7 @@ router.post("/violations/:id/review", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/escrows ââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/escrows Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/escrows", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -117,7 +117,7 @@ router.get("/escrows", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/escrows/:id/release ââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/escrows/:id/release Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/escrows/:id/release", async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -127,12 +127,12 @@ router.post("/escrows/:id/release", async (req, res, next) => {
     const escrow = rows[0];
     await query(`UPDATE escrows SET status = 'released', released_at = NOW(), released_by = $1, notes = $2 WHERE id = $3`, [req.user.id, notes || "Admin force release", id]);
     await query(`UPDATE listings SET status = 'sold' WHERE id = $1`, [escrow.listing_id]);
-    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'escrow_released', 'ð° Funds Released', 'An admin has released your escrow funds. They should reflect in your M-Pesa shortly.')`, [escrow.seller_id]);
+    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'escrow_released', 'Ã°ÂÂÂ° Funds Released', 'An admin has released your escrow funds. They should reflect in your M-Pesa shortly.')`, [escrow.seller_id]);
     res.json({ message: "Escrow released successfully" });
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/disputes âââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/disputes Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/disputes", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -146,7 +146,7 @@ router.get("/disputes", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/disputes/:id/resolve âââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/disputes/:id/resolve Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/disputes/:id/resolve", async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -160,12 +160,12 @@ router.post("/disputes/:id/resolve", async (req, res, next) => {
     const escrowStatus = release_to === "seller" ? "released" : "refunded";
     await query(`UPDATE escrows SET status = $1, released_at = NOW(), released_by = $2 WHERE id = $3`, [escrowStatus, req.user.id, dispute.escrow_id]);
     const notifyUserId = release_to === "seller" ? escrow.seller_id : escrow.buyer_id;
-    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'dispute_resolved', 'âï¸ Dispute Resolved', $2)`, [notifyUserId, `Your dispute has been resolved in your favour. Resolution: ${resolution}`]);
+    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'dispute_resolved', 'Ã¢ÂÂÃ¯Â¸Â Dispute Resolved', $2)`, [notifyUserId, `Your dispute has been resolved in your favour. Resolution: ${resolution}`]);
     res.json({ message: "Dispute resolved" });
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/users ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/users Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/users", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -182,7 +182,7 @@ router.get("/users", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/users/:id/suspend ââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/users/:id/suspend Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/users/:id/suspend", async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -192,7 +192,7 @@ router.post("/users/:id/suspend", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/payments âââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/payments Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/payments", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -204,7 +204,7 @@ router.get("/payments", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ PATCH /api/admin/users/:id/role ââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ PATCH /api/admin/users/:id/role Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.patch("/users/:id/role", async (req, res, next) => {
   try {
     const { role } = req.body;
@@ -215,7 +215,7 @@ router.patch("/users/:id/role", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/users/:id/listings ââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/users/:id/listings Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/users/:id/listings", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -229,7 +229,7 @@ router.get("/users/:id/listings", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/listings âââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/listings Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/listings", async (req, res, next) => {
   try {
     const { status, search, seller_id, page = 1, limit = 50 } = req.query;
@@ -254,7 +254,7 @@ router.get("/listings", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/listings/:id/detail âââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/listings/:id/detail Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/listings/:id/detail", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -270,7 +270,7 @@ router.get("/listings/:id/detail", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ PATCH /api/admin/listings/:id ââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ PATCH /api/admin/listings/:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.patch("/listings/:id", async (req, res, next) => {
   try {
     const { status, free_unlock, title, description, reason_for_sale, category, price, location, county } = req.body;
@@ -292,7 +292,7 @@ router.patch("/listings/:id", async (req, res, next) => {
     const changed = Object.keys(req.body).filter(k => k !== "free_unlock").join(", ");
     if (changed) {
       await query(
-        `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'admin_edit', 'âï¸ Your listing was edited by admin', $2, $3)`,
+        `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'admin_edit', 'Ã¢ÂÂÃ¯Â¸Â Your listing was edited by admin', $2, $3)`,
         [rows[0].seller_id, `An admin edited your listing "${rows[0].title}". Fields changed: ${changed}. If you have questions, contact support@wekasoko.co.ke`, JSON.stringify({ listing_id: req.params.id, changed_fields: Object.keys(req.body) })]
       ).catch(() => {});
     }
@@ -300,7 +300,7 @@ router.patch("/listings/:id", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ DELETE /api/admin/listings/:id âââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ DELETE /api/admin/listings/:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.delete("/listings/:id", async (req, res, next) => {
   try {
     const id = req.params.id;
@@ -317,18 +317,18 @@ router.delete("/listings/:id", async (req, res, next) => {
   } catch (err) { console.error("[Admin delete listing]", err.message); next(err); }
 });
 
-// ââ POST /api/admin/listings/:id/free-unlock âââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/listings/:id/free-unlock Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/listings/:id/free-unlock", async (req, res, next) => {
   try {
     const { id } = req.params;
     const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
-    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'admin_unlock', 'ð Admin Unlocked', 'An admin has unlocked this listing for free. You can now see the buyer contact details.')`, [rows[0].seller_id]);
+    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'admin_unlock', 'Ã°ÂÂÂ Admin Unlocked', 'An admin has unlocked this listing for free. You can now see the buyer contact details.')`, [rows[0].seller_id]);
     res.json({ message: "Listing unlocked for free", listing: rows[0] });
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/listings/:id/restore âââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/listings/:id/restore Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/listings/:id/restore", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -340,7 +340,7 @@ router.post("/listings/:id/restore", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/listings/:id/unlock ââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/listings/:id/unlock Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/listings/:id/unlock", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`, [req.params.id]);
@@ -349,12 +349,12 @@ router.post("/listings/:id/unlock", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/users/:id/free-unlock (deprecated) âââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/users/:id/free-unlock (deprecated) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/users/:id/free-unlock", async (req, res) => {
   res.status(410).json({ error: "Free unlock is per-listing. Use POST /api/admin/listings/:id/free-unlock instead." });
 });
 
-// ââ POST /api/admin/escrows/:id/approve ââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/escrows/:id/approve Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/escrows/:id/approve", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE escrows SET admin_approved=TRUE, approved_by=$1, approved_at=NOW() WHERE id=$2 RETURNING *`, [req.user.id, req.params.id]);
@@ -363,7 +363,7 @@ router.post("/escrows/:id/approve", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/escrows/:id/refund âââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/escrows/:id/refund Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/escrows/:id/refund", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE escrows SET status='refunded', released_at=NOW(), released_by=$1, notes='Admin refund' WHERE id=$2 RETURNING *`, [req.user.id, req.params.id]);
@@ -372,7 +372,7 @@ router.post("/escrows/:id/refund", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/vouchers âââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/vouchers Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/vouchers", async (req, res, next) => {
   try {
     const { rows } = await query(`SELECT v.*, u.name AS created_by_name FROM vouchers v LEFT JOIN users u ON u.id=v.created_by ORDER BY v.created_at DESC`);
@@ -380,7 +380,7 @@ router.get("/vouchers", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ POST /api/admin/vouchers ââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ POST /api/admin/vouchers Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.post("/vouchers", async (req, res, next) => {
   try {
     const { code, type, discount_percent, description, max_uses, expires_at } = req.body;
@@ -396,7 +396,7 @@ router.post("/vouchers", async (req, res, next) => {
   }
 });
 
-// ââ PATCH /api/admin/vouchers/:id/toggle âââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ PATCH /api/admin/vouchers/:id/toggle Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.patch("/vouchers/:id/toggle", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE vouchers SET active=NOT active WHERE id=$1 RETURNING *`, [req.params.id]);
@@ -404,7 +404,7 @@ router.patch("/vouchers/:id/toggle", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/requests âââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/requests Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/requests", async (req, res, next) => {
   try {
     const { page=1, limit=50, status } = req.query;
@@ -431,7 +431,7 @@ router.get("/requests", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/sold âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/sold Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/sold", async (req, res, next) => {
   try {
     const { page=1, limit=30 } = req.query;
@@ -448,8 +448,7 @@ router.get("/sold", async (req, res, next) => {
     const { rows: cnt } = await query(`SELECT COUNT(*) FROM listings WHERE status='sold'`);
     res.json({ listings: rows, total: parseInt(cnt[0].count) });
   } catch (err) { next(err); }
-});
-
+})
 
 router.post("/listings/:id/mark-sold", async (req, res, next) => {
   try {
@@ -472,9 +471,9 @@ router.post("/listings/:id/mark-sold", async (req, res, next) => {
     );
 
     // Notify the seller
-    const channelLabel = sold_channel === "platform" ? "via Weka Soko ð" : "outside the platform ð¤";
+    const channelLabel = sold_channel === "platform" ? "via Weka Soko Ã°ÂÂÂ" : "outside the platform Ã°ÂÂ¤Â";
     await query(
-      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1,'listing_sold','â Marked as Sold',$2,$3)`,
+      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1,'listing_sold','Ã¢ÂÂ Marked as Sold',$2,$3)`,
       [listing.seller_id,
        `Your listing "${listing.title}" has been marked as sold ${channelLabel} by an admin.`,
        JSON.stringify({ listing_id: id, sold_channel })]
@@ -482,7 +481,7 @@ router.post("/listings/:id/mark-sold", async (req, res, next) => {
 
     pushNotification(listing.seller_id, {
       type: "listing_sold",
-      title: "â Listing Marked Sold",
+      title: "Ã¢ÂÂ Listing Marked Sold",
       body: `"${listing.title}" has been marked as sold ${channelLabel}.`,
     });
 
@@ -490,7 +489,7 @@ router.post("/listings/:id/mark-sold", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/reports ââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/reports Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/reports", async (req, res, next) => {
   try {
     const status = req.query.status || "pending";
@@ -505,7 +504,7 @@ router.get("/reports", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ PATCH /api/admin/reports/:id âââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ PATCH /api/admin/reports/:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.patch("/reports/:id", async (req, res, next) => {
   try {
     const { action } = req.body;
@@ -515,7 +514,7 @@ router.patch("/reports/:id", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ GET /api/admin/reviews ââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ GET /api/admin/reviews Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/reviews", async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -529,7 +528,7 @@ router.get("/reviews", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ DELETE /api/admin/reviews/:id ââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ DELETE /api/admin/reviews/:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.delete("/reviews/:id", async (req, res, next) => {
   try {
     await query(`DELETE FROM reviews WHERE id=$1`, [req.params.id]);
@@ -537,12 +536,12 @@ router.delete("/reviews/:id", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ DELETE /api/admin/users/:id ââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ DELETE /api/admin/users/:id Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.delete("/users/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
     if (id === req.user.id) return res.status(400).json({ error: "Cannot delete your own account" });
-    // Safety check â never delete another admin account via this route
+    // Safety check Ã¢ÂÂ never delete another admin account via this route
     const { rows: target } = await query(`SELECT role FROM users WHERE id=$1`, [id]);
     if (!target.length) return res.status(404).json({ error: "User not found" });
     if (target[0].role === "admin") return res.status(403).json({ error: "Admin accounts cannot be deleted here. Use the Team Management section." });
@@ -551,7 +550,7 @@ router.delete("/users/:id", async (req, res, next) => {
   } catch (err) { console.error("[Admin delete user FATAL]", err.message); next(err); }
 });
 
-// ââ Shared nuclear delete â handles any schema version ââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ Shared nuclear delete Ã¢ÂÂ handles any schema version Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 async function purgeUser(uid) {
   // Step 1: collect Cloudinary IDs before any rows vanish
   const { rows: photoRows } = await query(
@@ -613,7 +612,7 @@ async function purgeUser(uid) {
   // Step 4: delete the user
   await query(`DELETE FROM users WHERE id=$1`, [uid]);
 
-  // Step 5: purge Cloudinary â outside DB, non-fatal
+  // Step 5: purge Cloudinary Ã¢ÂÂ outside DB, non-fatal
   if (photoRows.length > 0) {
     try {
       const { deleteByPublicId } = require("../services/cloudinary.service");
@@ -622,7 +621,7 @@ async function purgeUser(uid) {
   }
 }
 
-// ââ Admin Invite System âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ Admin Invite System Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 router.get("/admins", async (req, res, next) => {
   try {
     const { rows } = await query(`SELECT id, name, email, admin_level, created_at FROM users WHERE role='admin' ORDER BY created_at DESC`);
@@ -653,8 +652,8 @@ router.post("/invite", async (req, res, next) => {
       userId = rows[0].id;
     }
     const { sendEmail } = require("../services/email.service");
-    await sendEmail(email, name, "ð You've been invited to Weka Soko Admin",
-      `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\nâ Weka Soko`
+    await sendEmail(email, name, "Ã°ÂÂÂ You've been invited to Weka Soko Admin",
+      `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\nÃ¢ÂÂ Weka Soko`
     );
     res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
   } catch (err) { console.error("[Admin invite]", err.message); next(err); }
@@ -676,7 +675,7 @@ router.delete("/admins/:id", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ââ Ad Moderation Queue âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// Ã¢ÂÂÃ¢ÂÂ Ad Moderation Queue Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 const { sendEmail } = require("../services/email.service");
 const FRONTEND = process.env.FRONTEND_URL || "https://weka-soko.vercel.app";
 
@@ -711,13 +710,13 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
     const listing = check[0];
     await query(`UPDATE listings SET status='active', moderation_note=NULL, reviewed_at=NOW(), updated_at=NOW() WHERE id=$1`, [id]);
     await query(
-      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_approved', 'â Ad Approved!', $2, $3)`,
+      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_approved', 'Ã¢ÂÂ Ad Approved!', $2, $3)`,
       [listing.seller_id, `Great news! Your listing "${listing.title}" has been approved and is now live on Weka Soko.`, JSON.stringify({ listing_id: id })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "â Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
-    sendEmail(listing.email, listing.name, "â Your ad is live on Weka Soko!",
-      `Hi ${listing.name},\n\nYour listing "${listing.title}" has been approved and is now live.\n\n${FRONTEND}\n\nGood luck with your sale!\n\nâ Weka Soko`
+    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "Ã¢ÂÂ Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
+    sendEmail(listing.email, listing.name, "Ã¢ÂÂ Your ad is live on Weka Soko!",
+      `Hi ${listing.name},\n\nYour listing "${listing.title}" has been approved and is now live.\n\n${FRONTEND}\n\nGood luck with your sale!\n\nÃ¢ÂÂ Weka Soko`
     ).catch(e => console.error("[Moderation approve email]", e.message));
     res.json({ ok: true, message: "Listing approved and live" });
   } catch (err) { next(err); }
@@ -735,13 +734,13 @@ router.post("/moderation/:id/reject", async (req, res, next) => {
     const listing = check[0];
     await query(`UPDATE listings SET status='rejected', moderation_note=$1, reviewed_at=NOW(), updated_at=NOW() WHERE id=$2`, [reason.trim(), id]);
     await query(
-      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_rejected', 'â Ad Not Approved', $2, $3)`,
+      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_rejected', 'Ã¢ÂÂ Ad Not Approved', $2, $3)`,
       [listing.seller_id, `Your listing "${listing.title}" was not approved. Reason: ${reason.trim()}`, JSON.stringify({ listing_id: id, reason: reason.trim() })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_rejected", title: "â Ad Not Approved", body: `"${listing.title}" â ${reason.trim().slice(0, 80)}`, data: { listing_id: id } });
-    sendEmail(listing.email, listing.name, "â Your Weka Soko ad was not approved",
-      `Hi ${listing.name},\n\nYour listing "${listing.title}" was not approved.\n\nReason: ${reason.trim()}\n\nYou can edit and resubmit at:\n${FRONTEND}\n\nQuestions? Contact support@wekasoko.co.ke\n\nâ Weka Soko`
+    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_rejected", title: "Ã¢ÂÂ Ad Not Approved", body: `"${listing.title}" Ã¢ÂÂ ${reason.trim().slice(0, 80)}`, data: { listing_id: id } });
+    sendEmail(listing.email, listing.name, "Ã¢ÂÂ Your Weka Soko ad was not approved",
+      `Hi ${listing.name},\n\nYour listing "${listing.title}" was not approved.\n\nReason: ${reason.trim()}\n\nYou can edit and resubmit at:\n${FRONTEND}\n\nQuestions? Contact support@wekasoko.co.ke\n\nÃ¢ÂÂ Weka Soko`
     ).catch(e => console.error("[Moderation reject email]", e.message));
     res.json({ ok: true, message: "Listing rejected, seller notified" });
   } catch (err) { next(err); }
@@ -759,13 +758,13 @@ router.post("/moderation/:id/request-changes", async (req, res, next) => {
     const listing = check[0];
     await query(`UPDATE listings SET moderation_note=$1, updated_at=NOW() WHERE id=$2`, [note.trim(), id]);
     await query(
-      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_changes_requested', 'âï¸ Changes Needed on Your Ad', $2, $3)`,
+      `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_changes_requested', 'Ã¢ÂÂÃ¯Â¸Â Changes Needed on Your Ad', $2, $3)`,
       [listing.seller_id, `Your listing "${listing.title}" needs changes before it can go live. Note: ${note.trim()}`, JSON.stringify({ listing_id: id, note: note.trim() })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_changes_requested", title: "âï¸ Changes Needed", body: `"${listing.title}" â ${note.trim().slice(0, 80)}`, data: { listing_id: id } });
-    sendEmail(listing.email, listing.name, "âï¸ Changes needed on your Weka Soko ad",
-      `Hi ${listing.name},\n\nYour listing "${listing.title}" needs changes before going live.\n\nNote: ${note.trim()}\n\nEdit it at:\n${FRONTEND}\n\nOnce updated it will be re-reviewed automatically.\n\nâ Weka Soko`
+    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_changes_requested", title: "Ã¢ÂÂÃ¯Â¸Â Changes Needed", body: `"${listing.title}" Ã¢ÂÂ ${note.trim().slice(0, 80)}`, data: { listing_id: id } });
+    sendEmail(listing.email, listing.name, "Ã¢ÂÂÃ¯Â¸Â Changes needed on your Weka Soko ad",
+      `Hi ${listing.name},\n\nYour listing "${listing.title}" needs changes before going live.\n\nNote: ${note.trim()}\n\nEdit it at:\n${FRONTEND}\n\nOnce updated it will be re-reviewed automatically.\n\nÃ¢ÂÂ Weka Soko`
     ).catch(e => console.error("[Moderation changes email]", e.message));
     res.json({ ok: true, message: "Change request sent to seller" });
   } catch (err) { next(err); }
