@@ -497,7 +497,7 @@ app.use("/api/push", pushRoutes);
 app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
-    res.json({ status: "ok", db: "connected", version: "1.0.0", platform: "Weka Soko" });
+    res.json({ status: "ok", db: "connected", version: "1.1.0", platform: "Weka Soko", features: ["buyer_notifications", "mpesa_retry", "i_have_this"] });
   } catch {
     res.status(500).json({ status: "error", db: "disconnected" });
   }
