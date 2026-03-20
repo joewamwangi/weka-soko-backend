@@ -323,7 +323,7 @@ async function runMigration() {
       description TEXT NOT NULL,
       budget NUMERIC(12,2),
       county VARCHAR(60),
-      status VARCHAR(20) DEFAULT 'active',
+      status VARCHAR(20) DEFAULT 'pending',
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
