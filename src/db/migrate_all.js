@@ -323,10 +323,20 @@ async function runMigration() {
       description TEXT NOT NULL,
       budget NUMERIC(12,2),
       county VARCHAR(60),
+      category VARCHAR(80),
+      subcat VARCHAR(80),
+      keywords TEXT,
+      min_price NUMERIC(12,2),
+      max_price NUMERIC(12,2),
       status VARCHAR(20) DEFAULT 'pending',
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
+    await addCol("buyer_requests","category","VARCHAR(80)");
+    await addCol("buyer_requests","subcat","VARCHAR(80)");
+    await addCol("buyer_requests","keywords","TEXT");
+    await addCol("buyer_requests","min_price","NUMERIC(12,2)");
+    await addCol("buyer_requests","max_price","NUMERIC(12,2)");
 
 
     // ── SELLER PITCHES (I Have This) ─────────────────────────────────────────
@@ -357,6 +367,8 @@ async function runMigration() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_user ON buyer_requests(user_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_status ON buyer_requests(status)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_category ON buyer_requests(category)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_county ON buyer_requests(county)`).catch(()=>{});
 
     // ── SEARCH VECTOR ────────────────────────────────────────────────────────
     await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_search ON listings USING GIN(search_vector)`).catch(()=>{});
