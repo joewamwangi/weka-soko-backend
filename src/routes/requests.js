@@ -51,13 +51,23 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!title || !description) return res.status(400).json({ error: "Title and description are required" });
     if (title.length > 120) return res.status(400).json({ error: "Title too long (max 120 chars)" });
     
-    // Validate against contact info leakage (phone numbers, emails, etc.)
-    const contactPattern = /(?:\+?254|0)\d{1,3}\d{5,8}|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|\b(?:whatsapp|telegram|viber|signal)\b|\b(?:call|text|message|dm|inbox|contact)\s*(?:me|us)\b/gi;
-    const titleText = title.trim().toLowerCase();
-    const descText = description.trim().toLowerCase();
+    // Validate against contact info leakage
+    const titleLower = title.trim().toLowerCase();
+    const descLower = description.trim().toLowerCase();
     
-    if (contactPattern.test(titleText) || contactPattern.test(descText)) {
-      return res.status(400).json({ error: "Please do not include contact information (phone, email, social media) in your request. Sellers will contact you through the platform." });
+    // Check for phone numbers (Kenyan format)
+    if (/(?:\+?254|0)\d{7,9}/.test(titleLower) || /(?:\+?254|0)\d{7,9}/.test(descLower)) {
+      return res.status(400).json({ error: "Please do not include phone numbers in your request." });
+    }
+    
+    // Check for emails
+    if (/@/.test(titleLower) || /@/.test(descLower)) {
+      return res.status(400).json({ error: "Please do not include email addresses in your request." });
+    }
+    
+    // Check for social media
+    if (/(whatsapp|telegram|viber|signal|facebook|instagram|twitter|tiktok)/.test(titleLower) || /(whatsapp|telegram|viber|signal|facebook|instagram|twitter|tiktok)/.test(descLower)) {
+      return res.status(400).json({ error: "Please do not include social media handles in your request." });
     }
 
     const { rows } = await query(
@@ -65,6 +75,11 @@ router.post("/", requireAuth, async (req, res, next) => {
        VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING *`,
       [req.user.id, title.trim(), description.trim(), budget ? parseFloat(budget) : null, county || null]
     );
+    
+    if (!rows || rows.length === 0) {
+      return res.status(500).json({ error: "Failed to create request" });
+    }
+    
     res.status(201).json(rows[0]);
   } catch (err) { next(err); }
 });
