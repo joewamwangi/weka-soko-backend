@@ -768,9 +768,8 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
         const matches = await findMatchingRequests(id);
         if (matches.length > 0) {
           for (const match of matches.slice(0, 3)) {
-            const relevanceScore = Math.round(match.relevance_score);
             const desc = (listing.description || "").substring(0, 70);
-            const notifBody = `"${listing.title}" (${listing.category}) matches your request. ${desc}... Relevance: ${relevanceScore}%`;
+            const notifBody = `"${listing.title}" matches your request. ${desc}...`;
             
             await query(
               `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, $2, $3, $4, $5)`,
@@ -782,11 +781,12 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
                 JSON.stringify({
                   listing_id: id,
                   request_id: match.id,
-                  relevance_score: relevanceScore,
                   listing_title: listing.title,
                   listing_description: listing.description,
-                  listing_category: listing.category,
-                  listing_price: listing.price
+                  listing_price: listing.price,
+                  seller_id: listing.seller_id,
+                  is_unlocked: listing.is_unlocked || false,
+                  locked_buyer_id: listing.locked_buyer_id || null
                 })
               ]
             ).catch(e => console.error("[Notification insert]", e));
@@ -799,11 +799,12 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
                 data: {
                   listing_id: id,
                   request_id: match.id,
-                  relevance_score: relevanceScore,
                   listing_title: listing.title,
                   listing_description: listing.description,
-                  listing_category: listing.category,
-                  listing_price: listing.price
+                  listing_price: listing.price,
+                  seller_id: listing.seller_id,
+                  is_unlocked: listing.is_unlocked || false,
+                  locked_buyer_id: listing.locked_buyer_id || null
                 }
               });
             }
