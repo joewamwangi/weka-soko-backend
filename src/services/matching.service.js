@@ -188,11 +188,14 @@ async function notifyBuyerOfMatches(requestId, matches, io) {
          VALUES ($1, 'listing_match', 'New listing matches your request!', $2, $3)`,
         [
           buyerId,
-          `"${match.title}" matches your request. Relevance: ${match.relevance_score}%`,
+          `"${match.title}" (${match.category}) matches your request. ${match.description.substring(0, 70)}... Relevance: ${match.relevance_score}%`,
           JSON.stringify({
             listing_id: match.id,
             request_id: requestId,
             relevance_score: match.relevance_score,
+            listing_title: match.title,
+            listing_description: match.description,
+            listing_category: match.category,
           }),
         ]
       );
@@ -202,11 +205,15 @@ async function notifyBuyerOfMatches(requestId, matches, io) {
         io.to(`user:${buyerId}`).emit("notification", {
           type: "listing_match",
           title: "New listing matches your request!",
-          body: `"${match.title}" matches your request.`,
+          body: `"${match.title}" (${match.category}) matches your request. ${match.description.substring(0, 70)}...`,
           data: {
             listing_id: match.id,
             request_id: requestId,
             relevance_score: match.relevance_score,
+            listing_title: match.title,
+            listing_description: match.description,
+            listing_category: match.category,
+            listing_price: match.price,
           },
         });
       }
