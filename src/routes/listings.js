@@ -292,7 +292,7 @@ router.patch("/:id", requireAuth, requireSeller, upload.array("photos", 8), asyn
        request_id=COALESCE($8,request_id), is_contact_public=COALESCE($9,is_contact_public),
        status=COALESCE($10,status),
        moderation_note=CASE WHEN $10=\'pending_review\' THEN NULL ELSE moderation_note END,
-       updated_at=NOW() WHERE id=$11 RETURNING *\`,
+       updated_at=NOW() WHERE id=$11 RETURNING *`,
       [title, description, reason_for_sale, category, price?parseFloat(price):null, location, resolvedCounty||null, request_id||null, is_contact_public, id, newStatus||null]
     );
     if (req.files?.length) {
