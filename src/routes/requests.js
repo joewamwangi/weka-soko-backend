@@ -2,7 +2,6 @@
 const express = require("express");
 const { query } = require("../db/pool");
 const { requireAuth, optionalAuth } = require("../middleware/auth");
-const { findMatchingListings, notifyBuyerOfMatches } = require("../services/matching.service");
 
 const router = express.Router();
 
@@ -45,85 +44,68 @@ router.get("/", optionalAuth, async (req, res, next) => {
 });
 
 // ── POST /api/requests ─────────────────────────────────────────────────────
-// Create a new buyer request with category matching
+// Create a new buyer request + notify matching sellers
 router.post("/", requireAuth, async (req, res, next) => {
   try {
-    console.log("[POST /api/requests] User:", req.user?.id, "Body:", req.body);
     const { title, description, budget, county, category, subcat, keywords, min_price, max_price } = req.body;
     if (!title || !description) return res.status(400).json({ error: "Title and description are required" });
-    if (!category) return res.status(400).json({ error: "Category is required" });
     if (title.length > 120) return res.status(400).json({ error: "Title too long (max 120 chars)" });
-    
-    // Validate against contact info leakage
-    const titleLower = title.trim().toLowerCase();
-    const descLower = description.trim().toLowerCase();
-    
-    // Check for phone numbers (Kenyan format)
-    if (/(?:\+?254|0)\d{7,9}/.test(titleLower) || /(?:\+?254|0)\d{7,9}/.test(descLower)) {
-      return res.status(400).json({ error: "Please do not include phone numbers in your request." });
-    }
-    
-    // Check for emails
-    if (/@/.test(titleLower) || /@/.test(descLower)) {
-      return res.status(400).json({ error: "Please do not include email addresses in your request." });
-    }
-    
-    // Check for social media
-    if (/(whatsapp|telegram|viber|signal|facebook|instagram|twitter|tiktok)/.test(titleLower) || /(whatsapp|telegram|viber|signal|facebook|instagram|twitter|tiktok)/.test(descLower)) {
-      return res.status(400).json({ error: "Please do not include social media handles in your request." });
-    }
 
-    console.log("[POST /api/requests] Inserting request for user:", req.user.id);
-    const sql = `INSERT INTO buyer_requests (user_id, title, description, budget, county, category, subcat, keywords, min_price, max_price, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending') RETURNING *`;
-    const params = [
-      req.user.id,
-      title.trim(),
-      description.trim(),
-      budget ? parseFloat(budget) : null,
-      county || null,
-      category,
-      subcat || null,
-      keywords || null,
-      min_price ? parseFloat(min_price) : null,
-      max_price ? parseFloat(max_price) : null
-    ];
-    console.log("[POST /api/requests] SQL:", sql);
-    console.log("[POST /api/requests] Params:", params);
-    
-    let result;
-    try {
-      result = await query(sql, params);
-    } catch (queryErr) {
-      console.error("[POST /api/requests] Query error:", queryErr.message, queryErr.code);
-      throw queryErr;
-    }
-    
-    const { rows } = result;
-    console.log("[POST /api/requests] Insert result:", rows);
-    if (!rows || rows.length === 0) {
-      return res.status(500).json({ error: "Failed to create request" });
-    }
-    
-    const newRequest = rows[0];
-    
-    // Find matching listings and notify buyer
-    try {
-      const matches = await findMatchingListings(newRequest.id);
-      const io = req.app?.get("io");
-      if (matches.length > 0) {
-        await notifyBuyerOfMatches(newRequest.id, matches, io);
-      }
-    } catch (matchErr) {
-      console.error("[POST /api/requests] Error finding matches:", matchErr);
-      // Don't fail the request if matching fails
-    }
-    
-    console.log("[POST /api/requests] Returning request:", newRequest);
-    res.status(201).json(newRequest);
-  } catch (err) { 
-    console.error("[POST /api/requests] Error:", err);
-    next(err); 
-  }
+    const { rows } = await query(
+      `INSERT INTO buyer_requests
+         (user_id, title, description, budget, county, category, subcat, keywords, min_price, max_price)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [req.user.id, title.trim(), description.trim(),
+       budget ? parseFloat(budget) : null, county || null,
+       category || null, subcat || null, keywords || null,
+       min_price ? parseFloat(min_price) : null,
+       max_price ? parseFloat(max_price) : null]
+    );
+    const request = rows[0];
+    res.status(201).json(request);
+
+    // Async: find active sellers whose listings match this new request — notify them
+    (async () => {
+      try {
+        const priceFilter = [];
+        const priceParams = [req.user.id, title.trim()];
+        if (budget) { priceParams.push(parseFloat(budget)); priceFilter.push(`l.price <= $${priceParams.length}`); }
+        if (category) { priceParams.push(category); priceFilter.push(`l.category ILIKE $${priceParams.length}`); }
+
+        const { rows: matches } = await query(
+          `SELECT DISTINCT l.seller_id, l.id AS listing_id, l.title AS listing_title, u.anon_tag
+           FROM listings l JOIN users u ON u.id = l.seller_id
+           WHERE l.status = 'active'
+             AND l.seller_id != $1
+             AND (l.title ILIKE '%'||$2||'%' OR l.description ILIKE '%'||$2||'%'
+                  OR $2 ILIKE '%'||l.title||'%')
+             ${priceFilter.length ? 'AND ' + priceFilter.join(' AND ') : ''}
+           LIMIT 20`,
+          priceParams
+        );
+
+        const io = global._io;
+        for (const m of matches) {
+          await query(
+            `INSERT INTO notifications (user_id,type,title,body,data)
+             VALUES ($1,'listing_match','🛒 A buyer wants what you have!',$2,$3)
+             ON CONFLICT DO NOTHING`,
+            [m.seller_id,
+             `A buyer is looking for "${title.trim()}"${budget ? ` — budget KSh ${parseFloat(budget).toLocaleString()}` : ""}. You may have what they need!`,
+             JSON.stringify({ request_id: request.id, listing_id: m.listing_id })]
+          ).catch(() => {});
+          if (io) {
+            io.to(`user:${m.seller_id}`).emit("notification", {
+              type: "listing_match",
+              title: "🛒 A buyer wants what you have!",
+              body: `Someone is looking for "${title.trim()}"${budget ? ` — budget KSh ${parseFloat(budget).toLocaleString()}` : ""}`,
+              data: { request_id: request.id }
+            });
+          }
+        }
+      } catch (e) { /* non-critical */ }
+    })();
+  } catch (err) { next(err); }
 });
 
 // ── DELETE /api/requests/:id ───────────────────────────────────────────────
@@ -140,91 +122,7 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── GET /api/requests/:id/matches ───────────────────────────────────────────────────────
-// Get matching listings for a buyer request
-router.get("/:id/matches", optionalAuth, async (req, res, next) => {
-  try {
-    const { rows: requestRows } = await query(
-      `SELECT * FROM buyer_requests WHERE id = $1`,
-      [req.params.id]
-    );
-
-    if (!requestRows.length) {
-      return res.status(404).json({ error: "Request not found" });
-    }
-
-    const request = requestRows[0];
-
-    // Find matching listings
-    const conditions = ["l.status = 'active'", "l.expires_at > NOW()"];
-    const params = [];
-
-    if (request.category) {
-      params.push(request.category);
-      conditions.push(`l.category = $${params.length}`);
-    }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-    const { rows: listings } = await query(
-      `SELECT l.id, l.title, l.description, l.category, l.price, l.seller_id, l.created_at, l.listing_anon_tag AS seller_anon,
-              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
-       FROM listings l
-       ${where}
-       ORDER BY l.created_at DESC
-       LIMIT 50`,
-      params
-    );
-
-    // Calculate relevance scores
-    const matches = listings
-      .map(listing => {
-        let score = 0;
-
-        // Category match (40 points)
-        if (request.category && listing.category === request.category) {
-          score += 40;
-        } else if (request.category && listing.category) {
-          score += 20;
-        }
-
-        // Keywords match (35 points)
-        if (request.keywords) {
-          const keywords = request.keywords.toLowerCase().split(/\s+/).filter(k => k.length > 2);
-          const listingText = `${listing.title} ${listing.description}`.toLowerCase();
-          const matches = keywords.filter(k => listingText.includes(k)).length;
-          if (keywords.length > 0) {
-            score += Math.round((matches / keywords.length) * 35);
-          }
-        }
-
-        // Price range match (25 points)
-        if (request.min_price || request.max_price) {
-          const listingPrice = parseFloat(listing.price);
-          if (request.min_price && request.max_price) {
-            if (listingPrice >= request.min_price && listingPrice <= request.max_price) {
-              score += 25;
-            }
-          } else if (request.min_price && listingPrice >= request.min_price) {
-            score += 25;
-          } else if (request.max_price && listingPrice <= request.max_price) {
-            score += 25;
-          }
-        }
-
-        return {
-          ...listing,
-          relevance_score: Math.min(100, Math.max(0, score)),
-        };
-      })
-      .filter(m => m.relevance_score >= 30)
-      .sort((a, b) => b.relevance_score - a.relevance_score);
-
-    res.json({ matches, request });
-  } catch (err) { next(err); }
-});
-
-// ── GET /api/requests/mine ───────────────────────────────────────────────────────
+// ── GET /api/requests/mine ─────────────────────────────────────────────────
 // Get current user's own requests
 router.get("/mine", requireAuth, async (req, res, next) => {
   try {
