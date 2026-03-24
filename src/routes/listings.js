@@ -20,7 +20,6 @@ const { query, withTransaction } = require("../db/pool");
 const { requireAuth, optionalAuth, requireSeller } = require("../middleware/auth");
 const { scanListingForContact } = require("../services/moderation.service");
 const { uploadBuffer } = require("../services/cloudinary.service");
-const { notifySellerOfMatches } = require("../services/matching.service");
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024, files: 8 } });
 
@@ -52,7 +51,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
     params.push(parseInt(limit), offset);
     const sql = `
       SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
-             l.seller_id, l.is_unlocked, l.view_count, l.interest_count,
+             l.seller_id, l.is_unlocked, l.is_contact_public, l.linked_request_id, l.view_count, l.interest_count,
              l.created_at, l.expires_at, l.locked_buyer_id,
              l.listing_anon_tag AS seller_anon,
              CASE WHEN l.is_unlocked THEN u.name ELSE NULL END AS seller_name,
@@ -60,7 +59,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
              CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
              u.response_rate, u.avg_response_hours,
              u.avg_rating AS seller_avg_rating, u.review_count AS seller_review_count,
-             COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),\'[]\'::json) AS photos
+             COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
              ${searchClause}
       FROM listings l JOIN users u ON u.id=l.seller_id
       ${where}
@@ -193,7 +192,7 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
               l.sold_channel,
               u.name AS seller_name, u.email AS seller_email,
               u2.name AS buyer_name, u2.email AS buyer_email,
-              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
        FROM listings l
        JOIN users u ON u.id=l.seller_id
        LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
@@ -221,11 +220,10 @@ router.get("/:id", optionalAuth, async (req, res, next) => {
               CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
               u.response_rate, u.avg_response_hours,
               u.avg_rating AS seller_avg_rating, u.review_count AS seller_review_count,
-              (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.status=\'pending\') AS pending_reports,
-              COALESCE((SELECT json_agg(json_build_object(\'url\',p.url,\'sort_order\',p.sort_order) ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),\'[]\'::json) AS photos,
-              l.request_id, l.is_contact_public
+              (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.status='pending') AS pending_reports,
+              COALESCE((SELECT json_agg(json_build_object('url',p.url,'sort_order',p.sort_order) ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
        FROM listings l JOIN users u ON u.id=l.seller_id
-       WHERE l.id=$1 AND l.status!=\'deleted\'`,
+       WHERE l.id=$1 AND l.status!='deleted'`,
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
@@ -245,19 +243,18 @@ router.get("/:id", optionalAuth, async (req, res, next) => {
 // ── POST /api/listings ────────────────────────────────────────────────────────
 router.post("/", requireAuth, requireSeller, upload.array("photos", 8), async (req, res, next) => {
   try {
-    const { title, description, reason_for_sale, category, price, location, county, request_id, is_contact_public } = req.body;
+    const { title, description, reason_for_sale, category, price, location, county } = req.body;
     if (!title || !description || !price) return res.status(400).json({ error: "title, description, and price are required" });
     const scanResult = scanListingForContact({ title, description, reason_for_sale, location });
     if (scanResult.blocked) return res.status(422).json({ error: `Field "${scanResult.field}" contains contact info (${scanResult.reason}). Please remove it.`, violations: [scanResult] });
     const resolvedCounty = county || KENYA_COUNTIES.find(c => location && location.toLowerCase().includes(c.toLowerCase())) || null;
-    // All ads require admin approval. If Pay Now, it stays in pending_payment until paid, then moves to pending_review.
-    // If Pay Later, it moves straight to pending_review.
-    const initialStatus = (is_contact_public === "true" || is_contact_public === true) ? "pending_payment" : "pending_review";
     const result = await withTransaction(async (client) => {
       const { rows } = await client.query(
-        `INSERT INTO listings (seller_id,title,description,reason_for_sale,category,price,location,county,listing_anon_tag,status,request_id,is_contact_public)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-        [req.user.id, title, description, reason_for_sale, category, parseFloat(price), location, resolvedCounty, genListingTag(), initialStatus, request_id||null, is_contact_public === "true" || is_contact_public === true]
+        `INSERT INTO listings (seller_id,title,description,reason_for_sale,category,price,location,county,listing_anon_tag,status,linked_request_id,is_contact_public)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending_review',$10,$11) RETURNING *`,
+        [req.user.id, title, description, reason_for_sale, category, parseFloat(price), location, resolvedCounty, genListingTag(),
+         req.body.linked_request_id||null,
+         req.body.is_contact_public==='true']
       );
       const listing = rows[0];
       if (req.files?.length) {
@@ -268,17 +265,84 @@ router.post("/", requireAuth, requireSeller, upload.array("photos", 8), async (r
       return listing;
     });
     const io = req.app?.get("io");
-    if (io && result.status === "pending_review") io.to("admin").emit("new_listing_review", { listing_id: result.id, title: result.title });
-    res.status(201).json(result);
-
+    if (io) io.to("admin").emit("new_listing_review", { listing_id: result.id, title: result.title });
+    res.status(201).json({ ...result, status: "pending_review" });
+    // Async: notify matching buyer requests
+    (async () => {
+      try {
+        const { rows: matches } = await query(
+          `SELECT DISTINCT r.user_id, r.title, r.id AS request_id FROM buyer_requests r
+           WHERE r.status='active' AND r.user_id!=$1
+             AND ($2 ILIKE '%'||r.title||'%' OR r.title ILIKE '%'||$2||'%'
+                  OR r.description ILIKE '%'||$2||'%'
+                  OR ($3::varchar IS NOT NULL AND r.county ILIKE $3))`,
+          [req.user.id, result.title, result.county||null]
+        );
+        const io = req.app?.get("io") || global._io;
+        for (const match of matches) {
+          await query(
+            `INSERT INTO notifications (user_id,type,title,body,data)
+             VALUES ($1,'request_match','🛒 A listing matches your request!',$2,$3)`,
+            [match.user_id,
+             `"${result.title}" was just listed — it may match your request: "${match.title}"`,
+             JSON.stringify({ listing_id: result.id, request_id: match.request_id })]
+          ).catch(() => {});
+          // Real-time push to buyer
+          if (io) {
+            io.to(`user:${match.user_id}`).emit("notification", {
+              type: "request_match",
+              title: "🛒 A listing matches your request!",
+              body: `"${result.title}" was just listed — may match your request: "${match.title}"`,
+              data: { listing_id: result.id, request_id: match.request_id }
+            });
+          }
+        }
+      } catch(e) { /* non-critical */ }
+    })();
   } catch (err) { next(err); }
 });
+
+// ── GET /api/listings/:id ─────────────────────────────────────────────────────
+router.get("/:id", optionalAuth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT l.id, l.title, l.description, l.reason_for_sale, l.category, l.subcat,
+              l.price, l.location, l.county, l.status,
+              l.seller_id, l.is_unlocked, l.is_contact_public, l.linked_request_id,
+              l.view_count, l.interest_count, l.created_at, l.expires_at, l.locked_buyer_id,
+              l.listing_anon_tag AS seller_anon,
+              l.moderation_note,
+              CASE WHEN l.is_unlocked THEN u.name ELSE NULL END AS seller_name,
+              CASE WHEN l.is_unlocked THEN u.phone ELSE NULL END AS seller_phone,
+              CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
+              u.anon_tag AS seller_user_anon,
+              COALESCE(
+                (SELECT json_agg(p.url ORDER BY p.sort_order)
+                 FROM listing_photos p WHERE p.listing_id=l.id), '[]'
+              ) AS photos,
+              COALESCE(AVG(rv.rating),0) AS seller_avg_rating,
+              COUNT(rv.id) AS seller_review_count
+       FROM listings l
+       JOIN users u ON u.id=l.seller_id
+       LEFT JOIN reviews rv ON rv.seller_id=l.seller_id
+       WHERE l.id=$1
+       GROUP BY l.id,u.name,u.phone,u.email,u.anon_tag`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    const listing = rows[0];
+    // Increment view count
+    query(`UPDATE listings SET view_count=view_count+1 WHERE id=$1`, [req.params.id]).catch(()=>{});
+    res.json(listing);
+  } catch (err) { next(err); }
+});
+
 
 // ── PATCH /api/listings/:id ───────────────────────────────────────────────────
 router.patch("/:id", requireAuth, requireSeller, upload.array("photos", 8), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, description, reason_for_sale, category, price, location, county, request_id, is_contact_public } = req.body;
+    const { title, description, reason_for_sale, category, price, location, county } = req.body;
     const { rows: ex } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [id]);
     if (!ex.length) return res.status(404).json({ error: "Listing not found" });
     if (ex[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });
@@ -292,11 +356,10 @@ router.patch("/:id", requireAuth, requireSeller, upload.array("photos", 8), asyn
       `UPDATE listings SET title=COALESCE($1,title), description=COALESCE($2,description),
        reason_for_sale=COALESCE($3,reason_for_sale), category=COALESCE($4,category),
        price=COALESCE($5,price), location=COALESCE($6,location), county=COALESCE($7,county),
-       request_id=COALESCE($8,request_id), is_contact_public=COALESCE($9,is_contact_public),
-       status=COALESCE($10,status),
-       moderation_note=CASE WHEN $10=\'pending_review\' THEN NULL ELSE moderation_note END,
-       updated_at=NOW() WHERE id=$11 RETURNING *`,
-      [title, description, reason_for_sale, category, price?parseFloat(price):null, location, resolvedCounty||null, request_id||null, is_contact_public, id, newStatus||null]
+       status=COALESCE($9,status),
+       moderation_note=CASE WHEN $9='pending_review' THEN NULL ELSE moderation_note END,
+       updated_at=NOW() WHERE id=$8 RETURNING *`,
+      [title, description, reason_for_sale, category, price?parseFloat(price):null, location, resolvedCounty||null, id, newStatus||null]
     );
     if (req.files?.length) {
       const uploads = await Promise.all(req.files.map((f,i) => uploadBuffer(f.buffer, { folder: `weka-soko/listings/${id}` }).then(r => ({ ...r, sort_order: i+100 }))));
