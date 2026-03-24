@@ -23,6 +23,7 @@ const statsRoutes = require("./routes/stats");
 const voucherRoutes = require("./routes/vouchers");
 const reviewRoutes = require("./routes/reviews");
 const requestRoutes = require("./routes/requests");
+const pitchRoutes = require("./routes/pitches");
 const pushRoutes = require("./routes/push");
 const { sendPushToUser } = require("./routes/push");
 
@@ -43,6 +44,7 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+global._io = io; // accessible from routes
 // Socket.io is handled directly below
 const jwt = require("jsonwebtoken");
 const { detectContactInfo, getSeverity } = require("./services/moderation.service");
@@ -378,6 +380,7 @@ If you think this was a mistake, contact support@wekasoko.co.ke.
 
 // ── Express Middleware ─────────────────────────────────────────────────────────
 // Trust Railway's proxy (required for rate limiting to work correctly)
+app.set("io", io);
 app.set("trust proxy", 1);
 // Enhanced security headers
 app.use(helmet({
@@ -491,13 +494,14 @@ app.use("/api/stats", statsRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/requests", requestRoutes);
+app.use("/api/pitches", pitchRoutes);
 app.use("/api/push", pushRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
-    res.json({ status: "ok", db: "connected", version: "1.1.0", platform: "Weka Soko", features: ["buyer_notifications", "mpesa_retry", "i_have_this"] });
+    res.json({ status: "ok", db: "connected", version: "1.0.0", platform: "Weka Soko" });
   } catch {
     res.status(500).json({ status: "error", db: "disconnected" });
   }
