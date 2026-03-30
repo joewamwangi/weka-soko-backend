@@ -37,7 +37,7 @@ async function sendVerificationEmail(userId, email, name) {
     [token, expires, userId]
   );
   const link = `${FRONTEND}?verify_email=${token}`;
-  await sendEmail(
+  sendEmail(
     email, name,
     "✅ Verify your Weka Soko email",
     `Hi ${name},\n\nThank you for joining Weka Soko!\n\nPlease verify your email to unlock all features:\n${link}\n\nThis link expires in 24 hours.\n\nIf you didn't create an account, please ignore this email.\n\n— Weka Soko`
@@ -82,9 +82,9 @@ router.post(
       );
       const user = rows[0];
 
-      // Send verification email
+      // Send verification email in background — do NOT await, respond instantly
       const link = `${FRONTEND}?verify_email=${verifyToken}`;
-      await sendEmail(
+      sendEmail(
         email, name,
         "✅ Verify your Weka Soko email — one step left!",
         `Hi ${name},\n\nWelcome to Weka Soko! 🎉\n\nYou're almost ready. Please verify your email address to activate your account:\n\n👉 ${link}\n\nThis link expires in 24 hours. Once verified, you can sign in and start using Weka Soko.\n\nIf you didn't create this account, you can safely ignore this email.\n\n— Weka Soko`
@@ -198,9 +198,14 @@ router.post(
       if (user.role === "admin") return res.status(403).json({ error: "Admin accounts must sign in via the Weka Soko Admin panel." });
       if (user.is_suspended) return res.status(403).json({ error: "Account suspended. Contact support@wekasoko.co.ke" });
       // Unverified users must verify their email before logging in
-      // Email verification is encouraged but not enforced on login.
-      // Users who haven't verified get a warning flag in the response.
-      const needsVerification = !user.is_verified;
+      // Users must verify their email before logging in
+      if (!user.is_verified) {
+        return res.status(403).json({
+          error: "Please verify your email address before signing in. Check your inbox for the verification link.",
+          requiresVerification: true,
+          email: user.email
+        });
+      }
 
       const valid = await bcrypt.compare(password, user.password_hash);
       if (!valid) {
@@ -221,7 +226,7 @@ router.post(
       delete user.password_hash;
       delete user.account_status;
       const token = signToken(user);
-      res.json({ user, token, ...(needsVerification ? { needsVerification: true } : {}) });
+      res.json({ user, token });
     } catch (err) { next(err); }
   }
 );
@@ -455,7 +460,7 @@ router.post("/forgot-password", async (req, res, next) => {
     const baseUrl = (admin && user.role === "admin") ? ADMIN_URL : FRONTEND;
     const resetLink = `${baseUrl}?reset_token=${token}`;
 
-    await sendEmail(
+    sendEmail(
       user.email, user.name,
       "🔐 Reset your Weka Soko password",
       `Hi ${user.name},\n\nYou requested a password reset.\n\nSet a new password here (valid for 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email. Your password is unchanged.\n\n— Weka Soko`
