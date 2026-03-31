@@ -541,4 +541,15 @@ runMigration().then(() => {
   process.exit(1);
 });
 
+// ── Global crash protection ──────────────────────────────────────────────────
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason?.message || reason);
+  // Don't crash the process — just log it
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err.message);
+  // Don't crash for non-fatal errors
+});
+
 module.exports = { app, server };
