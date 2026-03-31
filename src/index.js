@@ -467,8 +467,9 @@ app.use(globalLimiter);
 // Stricter limiter for auth (login/register)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { error: "Too many auth attempts." },
+  max: 50,
+  message: { error: "Too many auth attempts. Please try again in 15 minutes." },
+  skipSuccessfulRequests: true, // successful signups/logins don't count toward limit
 });
 
 // Extra-strict limiter for password reset — 5 per IP per hour
