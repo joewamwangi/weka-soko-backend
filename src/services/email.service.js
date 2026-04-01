@@ -1,4 +1,6 @@
 // src/services/email.service.js
+const FRONTEND = process.env.FRONTEND_URL || 'https://weka-soko-nextjs-q89r3s4q6.vercel.app';
+
 async function sendEmail(to, name, subject, text) {
   if (!process.env.SENDGRID_API_KEY) return;
   const fromEmail = process.env.EMAIL_FROM;
@@ -73,7 +75,7 @@ ${text.replace(/</g, "&lt;").replace(/>/g, "&gt;")}
 
               <!-- CTA area -->
               <div style="margin-top:36px;padding-top:28px;border-top:1px solid #E0E0E0;">
-                <a href="https://weka-soko.vercel.app" 
+                <a href="${FRONTEND}"
                    style="display:inline-block;background:#1428A0;color:#FFFFFF;font-family:'Outfit',Arial,sans-serif;font-size:13px;font-weight:700;letter-spacing:0.02em;padding:12px 28px;text-decoration:none;">
                   Visit Weka Soko →
                 </a>
@@ -95,7 +97,7 @@ ${text.replace(/</g, "&lt;").replace(/>/g, "&gt;")}
                       &nbsp;·&nbsp;
                       <a href="mailto:support@wekasoko.co.ke" style="color:#767676;">Support</a>
                       &nbsp;·&nbsp;
-                      <a href="https://weka-soko.vercel.app" style="color:#767676;">wekasoko.co.ke</a>
+                      <a href="${FRONTEND}" style="color:#767676;">wekasoko.co.ke</a>
                     </p>
                   </td>
                   <td align="right" style="vertical-align:top;">
