@@ -92,12 +92,16 @@ router.post(
 
       // Welcome message intentionally skipped — WhatsApp not configured
 
-      // Do NOT return a token — user must verify email before they can log in
+      // Return token immediately — user can use platform right away
+      // Email verification is a soft reminder, not a hard block
+      const token = signToken(user);
       res.status(201).json({
         ok: true,
-        requiresVerification: true,
+        token,
+        user,
+        needsVerification: true,
         email,
-        message: `We sent a verification link to ${email}. Please check your inbox and click the link to activate your account.`
+        message: `Welcome to Weka Soko! Check your email to verify your account.`
       });
     } catch (err) {
       // PostgreSQL unique constraint violation
