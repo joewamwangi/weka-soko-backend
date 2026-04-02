@@ -22,6 +22,9 @@ const { sendEmail } = require("./services/email.service");
 const statsRoutes = require("./routes/stats");
 const voucherRoutes = require("./routes/vouchers");
 const reviewRoutes = require("./routes/reviews");
+const requestRoutes = require("./routes/requests");
+const pitchRoutes = require("./routes/pitches");
+const pushRoutes = require("./routes/push");
 
 const app = express();
 const server = http.createServer(app);
@@ -424,6 +427,9 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/requests", requestRoutes);
+app.use("/api/pitches", pitchRoutes);
+app.use("/api/push", pushRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
