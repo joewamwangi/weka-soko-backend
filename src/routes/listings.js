@@ -29,11 +29,12 @@ router.get("/counties", (req, res) => res.json(KENYA_COUNTIES));
 // ── GET /api/listings ─────────────────────────────────────────────────────────
 router.get("/", optionalAuth, async (req, res, next) => {
   try {
-    const { category, search, minPrice, maxPrice, county, location, page=1, limit=20, sort="newest" } = req.query;
+    const { category, subcat, search, minPrice, maxPrice, county, location, page=1, limit=20, sort="newest" } = req.query;
     const offset = (parseInt(page)-1)*parseInt(limit);
     const params = [];
     const conditions = ["l.status='active'", "l.expires_at > NOW()"];
     if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
+    if (subcat) { params.push(subcat); conditions.push(`l.subcat ILIKE $${params.length}`); }
     if (county) { params.push(county); conditions.push(`l.county ILIKE $${params.length}`); }
     if (minPrice) { params.push(parseFloat(minPrice)); conditions.push(`l.price>=$${params.length}`); }
     if (maxPrice) { params.push(parseFloat(maxPrice)); conditions.push(`l.price<=$${params.length}`); }
@@ -136,10 +137,14 @@ router.get("/sold", optionalAuth, async (req, res, next) => {
               COALESCE(l.sold_at, l.updated_at) AS sold_at,
               l.sold_channel,
               l.listing_anon_tag AS seller_anon,
+              u.name AS seller_name, u.phone AS seller_phone, u.email AS seller_email,
+              u2.name AS buyer_name, u2.phone AS buyer_phone, u2.email AS buyer_email,
               COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos,
               (SELECT ROUND(AVG(r.rating)::numeric,1) FROM reviews r WHERE r.listing_id=l.id) AS avg_rating,
               (SELECT COUNT(*) FROM reviews r WHERE r.listing_id=l.id) AS review_count
-       FROM listings l JOIN users u ON u.id=l.seller_id
+       FROM listings l
+       JOIN users u ON u.id=l.seller_id
+       LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
        ${where} ORDER BY COALESCE(l.sold_at, l.updated_at) DESC
        LIMIT $${params.length-1} OFFSET $${params.length}`,
       params
