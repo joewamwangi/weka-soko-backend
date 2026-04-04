@@ -552,4 +552,26 @@ router.post("/:id/photos", requireAuth, requireSeller, upload.array("photos", 8)
   } catch (err) { next(err); }
 });
 
+// ── POST /api/listings/:id/seed-photos ───────────────────────────────────────
+// Dev-only: inject photo URLs without Cloudinary upload. Requires listing ownership.
+router.post("/:id/seed-photos", requireAuth, requireSeller, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { urls } = req.body;
+    if (!Array.isArray(urls) || !urls.length) return res.status(400).json({ error: "urls array required" });
+    const { rows: ls } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [id]);
+    if (!ls.length) return res.status(404).json({ error: "Listing not found" });
+    if (ls[0].seller_id !== req.user.id && req.user.role !== "admin")
+      return res.status(403).json({ error: "Not your listing" });
+    await query(`DELETE FROM listing_photos WHERE listing_id=$1`, [id]);
+    for (let i = 0; i < urls.length; i++) {
+      await query(
+        `INSERT INTO listing_photos (listing_id, url, public_id, sort_order) VALUES ($1,$2,$3,$4)`,
+        [id, urls[i], `seed/${id}/${i}`, i]
+      );
+    }
+    res.json({ ok: true, inserted: urls.length });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
