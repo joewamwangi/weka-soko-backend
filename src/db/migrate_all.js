@@ -365,6 +365,16 @@ async function runMigration() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
+    // ── SAVED LISTINGS ────────────────────────────────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS saved_listings (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      listing_id UUID NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, listing_id)
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_saved_listings_user ON saved_listings(user_id)`).catch(()=>{});
+
     // ── INDEXES ───────────────────────────────────────────────────────────────
     await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_category ON listings(category)`).catch(()=>{});

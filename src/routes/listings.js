@@ -289,6 +289,34 @@ router.post("/", requireAuth, requireSeller, upload.array("photos", 8), async (r
   } catch (err) { next(err); }
 });
 
+// ── GET /api/listings/buyer/saved ─────────────────────────────────────────────
+router.get("/buyer/saved", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT l.*, l.listing_anon_tag AS seller_anon,
+              CASE WHEN l.is_unlocked THEN u.name ELSE NULL END AS seller_name,
+              CASE WHEN l.is_unlocked THEN u.phone ELSE NULL END AS seller_phone,
+              CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
+              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+       FROM saved_listings s JOIN listings l ON l.id=s.listing_id JOIN users u ON u.id=l.seller_id
+       WHERE s.user_id=$1 AND l.status!='deleted' ORDER BY s.created_at DESC`,
+      [req.user.id]
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/listings/buyer/saved/ids ─────────────────────────────────────────
+router.get("/buyer/saved/ids", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT listing_id FROM saved_listings WHERE user_id=$1`,
+      [req.user.id]
+    );
+    res.json(rows.map(r => r.listing_id));
+  } catch (err) { next(err); }
+});
+
 // ── GET /api/listings/:id ─────────────────────────────────────────────────────
 router.get("/:id", optionalAuth, async (req, res, next) => {
   try {
@@ -424,6 +452,26 @@ router.post("/:id/mark-sold", requireAuth, requireSeller, async (req, res, next)
     } catch (_) {}
 
     res.json({ success: true, channel, listing_id: listing.id });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/listings/:id/save — toggle save/unsave ─────────────────────────
+router.post("/:id/save", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT id FROM saved_listings WHERE user_id=$1 AND listing_id=$2`,
+      [req.user.id, req.params.id]
+    );
+    if (rows.length) {
+      await query(`DELETE FROM saved_listings WHERE user_id=$1 AND listing_id=$2`, [req.user.id, req.params.id]);
+      res.json({ saved: false });
+    } else {
+      await query(
+        `INSERT INTO saved_listings (user_id, listing_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [req.user.id, req.params.id]
+      );
+      res.json({ saved: true });
+    }
   } catch (err) { next(err); }
 });
 
