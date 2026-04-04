@@ -2,6 +2,7 @@
 const express = require("express");
 const { query } = require("../db/pool");
 const { requireAuth, optionalAuth } = require("../middleware/auth");
+const { detectContactInfo } = require("../services/moderation.service");
 
 const router = express.Router();
 
@@ -9,13 +10,20 @@ const router = express.Router();
 // List all active buyer requests (paginated)
 router.get("/", optionalAuth, async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, county, search } = req.query;
+    const { page = 1, limit = 20, county, search, category, subcat, min_price, max_price, sort = 'newest' } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const params = [];
     const conditions = ["r.status = 'active'"];
 
     if (county) { params.push(county); conditions.push(`r.county ILIKE $${params.length}`); }
     if (search) { params.push(`%${search}%`); conditions.push(`(r.title ILIKE $${params.length} OR r.description ILIKE $${params.length})`); }
+    if (category) { params.push(category); conditions.push(`r.category ILIKE $${params.length}`); }
+    if (subcat) { params.push(subcat); conditions.push(`r.subcat ILIKE $${params.length}`); }
+    if (min_price) { params.push(parseFloat(min_price)); conditions.push(`(r.budget IS NULL OR r.budget >= $${params.length})`); }
+    if (max_price) { params.push(parseFloat(max_price)); conditions.push(`(r.budget IS NULL OR r.budget <= $${params.length})`); }
+
+    const sortMap = { newest: 'r.created_at DESC', oldest: 'r.created_at ASC', budget_asc: 'r.budget ASC NULLS LAST', budget_desc: 'r.budget DESC NULLS LAST' };
+    const orderBy = sortMap[sort] || 'r.created_at DESC';
 
     const where = "WHERE " + conditions.join(" AND ");
     params.push(parseInt(limit), offset);
@@ -29,7 +37,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
        FROM buyer_requests r
        JOIN users u ON u.id = r.user_id
        ${where}
-       ORDER BY r.created_at DESC
+       ORDER BY ${orderBy}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
@@ -50,6 +58,14 @@ router.post("/", requireAuth, async (req, res, next) => {
     const { title, description, budget, county, category, subcat, keywords, min_price, max_price } = req.body;
     if (!title || !description) return res.status(400).json({ error: "Title and description are required" });
     if (title.length > 120) return res.status(400).json({ error: "Title too long (max 120 chars)" });
+
+    // Contact info scan
+    for (const [field, val] of [["title", title], ["description", description]]) {
+      if (val) {
+        const r = detectContactInfo(val);
+        if (r.blocked) return res.status(422).json({ error: `"${field}" contains contact info (${r.reason}). Remove it to proceed.` });
+      }
+    }
 
     const { rows } = await query(
       `INSERT INTO buyer_requests
