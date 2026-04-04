@@ -86,6 +86,8 @@ async function initiateSTKPush({ phone, amount, accountRef, description, payment
     TransactionDesc: description || "Weka Soko Payment",
   };
 
+  console.log("[M-Pesa STK] isLive:", isLive, "| ShortCode:", SHORTCODE, "| TransactionType:", payload.TransactionType, "| BASE_URL:", BASE_URL);
+
   let res;
   try {
     res = await axios.post(
