@@ -101,6 +101,8 @@ async function runMigration() {
     await addCol("listings","moderation_reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
     await addCol("listings","is_contact_public","BOOLEAN DEFAULT FALSE");
     await addCol("listings","payment_expires_at","TIMESTAMPTZ");
+    await addCol("listings","sold_at","TIMESTAMPTZ");
+    await addCol("listings","sold_channel","VARCHAR(30)");
     // NOTE: linked_request_id added AFTER buyer_requests table is created (below)
 
     // Backfill expires_at for existing listings that don't have one
@@ -161,6 +163,12 @@ async function runMigration() {
     await addCol("payments","amount_kes","NUMERIC(12,2)");
     await addCol("payments","till_number","VARCHAR(20) DEFAULT '5673935'");
     await addCol("payments","voucher_code","VARCHAR(30)");
+    // Columns the code actually uses (migration originally used different names)
+    await addCol("payments","type","VARCHAR(30)");
+    await addCol("payments","mpesa_phone","VARCHAR(20)");
+    await addCol("payments","mpesa_checkout_id","VARCHAR(100)");
+    await addCol("payments","stk_push_sent_at","TIMESTAMPTZ");
+    await addCol("payments","confirmed_at","TIMESTAMPTZ");
 
     // ── ESCROWS ───────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS escrows (
@@ -180,6 +188,13 @@ async function runMigration() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
+
+    // Columns the code actually uses for escrow (migration originally used different names)
+    await addCol("escrows","payment_id","UUID REFERENCES payments(id) ON DELETE SET NULL");
+    await addCol("escrows","item_amount","NUMERIC(12,2)");
+    await addCol("escrows","fee_amount","NUMERIC(12,2)");
+    await addCol("escrows","total_amount","NUMERIC(12,2)");
+    await addCol("escrows","buyer_confirmed_at","TIMESTAMPTZ");
 
     // ── DISPUTES ──────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS disputes (
@@ -243,6 +258,10 @@ async function runMigration() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
+    // Voucher columns the code uses (migration originally used different names)
+    await addCol("vouchers","active","BOOLEAN DEFAULT TRUE");
+    await addCol("vouchers","discount_percent","INT DEFAULT 0");
+
     // ── PRICE OFFERS ──────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS price_offers (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -267,7 +286,10 @@ async function runMigration() {
       UNIQUE(listing_id, reviewer_id)
     );`);
 
+    // reviewee_id is what the code uses; reviewed_user_id is what the original migration used
+    await addCol("reviews","reviewee_id","UUID REFERENCES users(id) ON DELETE CASCADE");
     await client.query(`CREATE INDEX IF NOT EXISTS idx_reviews_reviewed ON reviews(reviewed_user_id)`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_reviews_reviewee ON reviews(reviewee_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_reviews_listing ON reviews(listing_id)`).catch(()=>{});
 
     // ── BUYER REQUESTS (What Buyers Want) ─────────────────────────────────────
@@ -318,6 +340,25 @@ async function runMigration() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_category ON buyer_requests(category)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_seller_pitches_request ON seller_pitches(request_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_seller_pitches_seller ON seller_pitches(seller_id)`).catch(()=>{});
+
+    // ── PASSWORD HISTORY ──────────────────────────────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS password_history (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );`);
+
+    // ── PUSH SUBSCRIPTIONS ────────────────────────────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT,
+      auth TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );`);
 
     // ── INDEXES ───────────────────────────────────────────────────────────────
     await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status)`).catch(()=>{});

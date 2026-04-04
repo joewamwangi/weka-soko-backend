@@ -209,37 +209,6 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── GET /api/listings/:id ─────────────────────────────────────────────────────
-// MUST be after all specific routes above
-router.get("/:id", optionalAuth, async (req, res, next) => {
-  try {
-    const { rows } = await query(
-      `SELECT l.*, l.listing_anon_tag AS seller_anon,
-              CASE WHEN l.is_unlocked THEN u.name ELSE NULL END AS seller_name,
-              CASE WHEN l.is_unlocked THEN u.phone ELSE NULL END AS seller_phone,
-              CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
-              u.response_rate, u.avg_response_hours,
-              u.avg_rating AS seller_avg_rating, u.review_count AS seller_review_count,
-              (SELECT COUNT(*) FROM listing_reports r WHERE r.listing_id=l.id AND r.status='pending') AS pending_reports,
-              COALESCE((SELECT json_agg(json_build_object('url',p.url,'sort_order',p.sort_order) ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
-       FROM listings l JOIN users u ON u.id=l.seller_id
-       WHERE l.id=$1 AND l.status!='deleted'`,
-      [req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
-    const listing = rows[0];
-    if (!req.user || req.user.id !== listing.seller_id) {
-      await query(`UPDATE listings SET view_count=view_count+1 WHERE id=$1`, [req.params.id]);
-      listing.view_count += 1;
-    }
-    if (req.user && req.user.id === listing.seller_id) {
-      const { rows: sr } = await query(`SELECT name,phone,email FROM users WHERE id=$1`, [req.user.id]);
-      listing.seller_name = sr[0].name; listing.seller_phone = sr[0].phone; listing.seller_email = sr[0].email;
-    }
-    res.json(listing);
-  } catch (err) { next(err); }
-});
-
 // ── POST /api/listings ────────────────────────────────────────────────────────
 router.post("/", requireAuth, requireSeller, upload.array("photos", 8), async (req, res, next) => {
   try {
