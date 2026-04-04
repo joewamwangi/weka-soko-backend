@@ -320,6 +320,9 @@ io.on("connection", (socket) => {
   if (socket.user.role === "admin") socket.join("admin");
 });
 
+// Make io accessible in route handlers via req.app.get("io")
+app.set("io", io);
+
 // ── Express Middleware ─────────────────────────────────────────────────────────
 app.set("trust proxy", 1);
 app.use(helmet({

@@ -212,7 +212,7 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
 // ── POST /api/listings ────────────────────────────────────────────────────────
 router.post("/", requireAuth, requireSeller, upload.array("photos", 8), async (req, res, next) => {
   try {
-    const { title, description, reason_for_sale, category, price, location, county } = req.body;
+    const { title, description, reason_for_sale, category, subcat, price, location, county } = req.body;
     if (!title || !description || !price) return res.status(400).json({ error: "title, description, and price are required" });
     const scanResult = scanListingForContact({ title, description, reason_for_sale, location });
     if (scanResult.blocked) return res.status(422).json({ error: `Field "${scanResult.field}" contains contact info (${scanResult.reason}). Please remove it.`, violations: [scanResult] });
@@ -233,9 +233,9 @@ router.post("/", requireAuth, requireSeller, upload.array("photos", 8), async (r
 
     const result = await withTransaction(async (client) => {
       const { rows } = await client.query(
-        `INSERT INTO listings (seller_id,title,description,reason_for_sale,category,price,location,county,listing_anon_tag,status,linked_request_id,is_contact_public)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending_review',$10,$11) RETURNING *`,
-        [req.user.id, title, description, reason_for_sale, category, parseFloat(price), location, resolvedCounty, genListingTag(),
+        `INSERT INTO listings (seller_id,title,description,reason_for_sale,category,subcat,price,location,county,listing_anon_tag,status,linked_request_id,is_contact_public)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review',$11,$12) RETURNING *`,
+        [req.user.id, title, description, reason_for_sale, category, subcat||null, parseFloat(price), location, resolvedCounty, genListingTag(),
          req.body.linked_request_id||null,
          req.body.is_contact_public==='true']
       );
@@ -329,7 +329,7 @@ router.get("/:id", optionalAuth, async (req, res, next) => {
 router.patch("/:id", requireAuth, requireSeller, upload.array("photos", 8), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, description, reason_for_sale, category, price, location, county } = req.body;
+    const { title, description, reason_for_sale, category, subcat, price, location, county } = req.body;
     const { rows: ex } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [id]);
     if (!ex.length) return res.status(404).json({ error: "Listing not found" });
     if (ex[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });
@@ -354,11 +354,12 @@ router.patch("/:id", requireAuth, requireSeller, upload.array("photos", 8), asyn
     const { rows } = await query(
       `UPDATE listings SET title=COALESCE($1,title), description=COALESCE($2,description),
        reason_for_sale=COALESCE($3,reason_for_sale), category=COALESCE($4,category),
-       price=COALESCE($5,price), location=COALESCE($6,location), county=COALESCE($7,county),
-       status=COALESCE($9,status),
-       moderation_note=CASE WHEN $9='pending_review' THEN NULL ELSE moderation_note END,
-       updated_at=NOW() WHERE id=$8 RETURNING *`,
-      [title, description, reason_for_sale, category, price?parseFloat(price):null, location, resolvedCounty||null, id, newStatus||null]
+       subcat=COALESCE($5,subcat),
+       price=COALESCE($6,price), location=COALESCE($7,location), county=COALESCE($8,county),
+       status=COALESCE($10,status),
+       moderation_note=CASE WHEN $10='pending_review' THEN NULL ELSE moderation_note END,
+       updated_at=NOW() WHERE id=$9 RETURNING *`,
+      [title, description, reason_for_sale, category, subcat||null, price?parseFloat(price):null, location, resolvedCounty||null, id, newStatus||null]
     );
     if (patchUploads.length) {
       await Promise.all(patchUploads.map(({ url, public_id, sort_order }) =>
