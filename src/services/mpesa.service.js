@@ -9,8 +9,10 @@ const BASE_URL = process.env.MPESA_BASE_URL ||
   (isLive ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke");
 if (isLive) console.log(" M-Pesa: LIVE mode");
 else console.log(" M-Pesa: SANDBOX mode");
-const SHORTCODE = process.env.MPESA_SHORTCODE;
-const PASSKEY = process.env.MPESA_PASSKEY;
+const SHORTCODE = isLive ? process.env.MPESA_SHORTCODE : "174379";
+const PASSKEY = isLive
+  ? process.env.MPESA_PASSKEY
+  : "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919";
 const CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
 const CALLBACK_URL = process.env.MPESA_CALLBACK_URL;
@@ -74,7 +76,7 @@ async function initiateSTKPush({ phone, amount, accountRef, description, payment
     BusinessShortCode: SHORTCODE,
     Password: password,
     Timestamp: timestamp,
-    TransactionType: "CustomerBuyGoodsOnline",
+    TransactionType: isLive ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
     Amount: Math.ceil(amount),              // M-Pesa only accepts integers
     PartyA: formattedPhone,
     PartyB: SHORTCODE,
