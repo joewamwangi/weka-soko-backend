@@ -432,6 +432,27 @@ async function runMigration() {
 
     await client.query("COMMIT");
     console.log(" DB migration complete");
+
+    // ── Admin seed (runs OUTSIDE main transaction so failures don't abort migration) ──
+    // Set ADMIN_SEED_EMAIL + ADMIN_SEED_PASSWORD in Railway env vars to create/reset admin.
+    // Remove them after the admin is working.
+    if (process.env.ADMIN_SEED_EMAIL && process.env.ADMIN_SEED_PASSWORD) {
+      try {
+        const bcrypt = require("bcryptjs");
+        const hash = await bcrypt.hash(process.env.ADMIN_SEED_PASSWORD, 12);
+        await pool.query(
+          `INSERT INTO users (name, email, password_hash, role, anon_tag, is_verified, admin_level)
+           VALUES ('Admin', $1, $2, 'admin', 'AdminWekaSoko01', true, 'super')
+           ON CONFLICT (email) DO UPDATE SET
+             role='admin', password_hash=$2, is_verified=true, admin_level='super',
+             is_suspended=false, account_status='active', updated_at=NOW()`,
+          [process.env.ADMIN_SEED_EMAIL, hash]
+        );
+        console.log(` Admin account ready: ${process.env.ADMIN_SEED_EMAIL}`);
+      } catch (e) {
+        console.error(" Admin seed failed:", e.message);
+      }
+    }
   } catch (err) {
     await client.query("ROLLBACK");
     console.error(" Migration failed:", err.message);

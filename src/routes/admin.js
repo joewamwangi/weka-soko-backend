@@ -898,7 +898,7 @@ router.post("/moderation/:id/request-changes", async (req, res, next) => {
     );
     if (!check.length) return res.status(404).json({ error: "Listing not found" });
     const listing = check[0];
-    await query(`UPDATE listings SET moderation_note=$1, updated_at=NOW() WHERE id=$2`, [note.trim(), id]);
+    await query(`UPDATE listings SET status='rejected', moderation_note=$1, reviewed_at=NOW(), updated_at=NOW() WHERE id=$2`, [note.trim(), id]);
     await query(
       `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'listing_changes_requested', 'Changes Needed on Your Ad', $2, $3)`,
       [listing.seller_id, `Your listing "${listing.title}" needs changes before it can go live. Note: ${note.trim()}`, JSON.stringify({ listing_id: id, note: note.trim() })]

@@ -249,7 +249,7 @@ router.post(
 router.get("/me", requireAuth, async (req, res, next) => {
   try {
     const { rows } = await query(
-      `SELECT id,name,email,role,anon_tag,phone,avatar_url,is_verified,
+      `SELECT id,name,email,role,admin_level,anon_tag,phone,avatar_url,is_verified,
               response_rate,avg_response_hours,account_status,whatsapp_phone,created_at
        FROM users WHERE id=$1`,
       [req.user.id]
