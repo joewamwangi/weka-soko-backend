@@ -51,7 +51,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
     const where = "WHERE " + conditions.join(" AND ");
     params.push(parseInt(limit), offset);
     const sql = `
-      SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
+      SELECT l.id, l.title, l.description, l.reason_for_sale, l.category, l.subcat, l.price, l.location, l.county, l.status,
              l.seller_id, l.is_unlocked, l.is_contact_public, l.linked_request_id, l.view_count, l.interest_count,
              l.created_at, l.expires_at, l.locked_buyer_id,
              l.listing_anon_tag AS seller_anon,
