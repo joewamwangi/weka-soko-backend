@@ -6,7 +6,7 @@ const { initiateSTKPush, handleCallback, querySTKStatus } = require("../services
 
 const router = express.Router();
 const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "250");
-const ESCROW_FEE_PCT = parseFloat(process.env.ESCROW_FEE_PERCENT || "7.5") / 100;
+const ESCROW_FEE_PCT = parseFloat(process.env.ESCROW_FEE_PERCENT || "5.5") / 100;
 
 // ── POST /api/payments/unlock ──────────────────────────────────────────────────
 router.post("/unlock", requireAuth, async (req, res, next) => {
@@ -105,7 +105,7 @@ router.post("/escrow", requireAuth, async (req, res, next) => {
       return paymentId;
     });
     const stkResult = await initiateSTKPush({ phone, amount: totalAmount, accountRef: `WS-ESCROW-${listing_id.slice(0,8).toUpperCase()}`, description: `Weka Soko escrow - ${listing.title}`, paymentId: result });
-    res.json({ message: `STK Push sent for KSh ${totalAmount.toLocaleString()} (includes 7.5% escrow fee). Enter your M-Pesa PIN.`, checkoutRequestId: stkResult.checkoutRequestId, breakdown: { item_price: listing.price, escrow_fee: feeAmount, total: totalAmount } });
+    res.json({ message: `STK Push sent for KSh ${totalAmount.toLocaleString()} (includes 5.5% escrow fee). Enter your M-Pesa PIN.`, checkoutRequestId: stkResult.checkoutRequestId, breakdown: { item_price: listing.price, escrow_fee: feeAmount, total: totalAmount } });
   } catch (err) { next(err); }
 });
 
