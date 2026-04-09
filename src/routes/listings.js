@@ -236,8 +236,8 @@ router.post("/", requireAuth, upload.array("photos", 8), async (req, res, next) 
           )
         );
       } catch (uploadErr) {
-        console.error("[Cloudinary] Upload failed:", uploadErr.message);
-        return res.status(502).json({ error: "Photo upload failed. Please try without photos or use smaller images." });
+        console.error("[Cloudinary] Upload failed:", uploadErr.message, uploadErr.http_code);
+        return res.status(502).json({ error: `Photo upload failed: ${uploadErr.message}` });
       }
     }
 
