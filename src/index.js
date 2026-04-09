@@ -25,6 +25,7 @@ const reviewRoutes = require("./routes/reviews");
 const requestRoutes = require("./routes/requests");
 const pitchRoutes = require("./routes/pitches");
 const pushRoutes = require("./routes/push");
+const storeRoutes = require("./routes/stores");
 
 const app = express();
 const server = http.createServer(app);
@@ -433,6 +434,7 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/requests", requestRoutes);
 app.use("/api/pitches", pitchRoutes);
 app.use("/api/push", pushRoutes);
+app.use("/api/stores", storeRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
