@@ -2,6 +2,7 @@
 const express = require("express");
 const { query } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
+const { auditLog } = require("../services/audit.service");
 const router = express.Router();
 
 let _io = null;
@@ -84,6 +85,7 @@ router.post("/violations/:id/review", async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: "Violation not found" });
     const v = rows[0];
     await query(`UPDATE chat_violations SET reviewed = TRUE WHERE id = $1`, [id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: `violation_${action}`, targetType: "user", targetId: v.user_id, details: { violation_id: id, listing_id: v.listing_id }, ip: req.ip });
     const MAX_WARNINGS = 5;
     if (action === "suspend") {
       await query(`UPDATE users SET is_suspended = TRUE WHERE id = $1`, [v.user_id]);
@@ -154,6 +156,7 @@ router.post("/escrows/:id/release", async (req, res, next) => {
     await query(`UPDATE escrows SET status = 'released', released_at = NOW(), released_by = $1, notes = $2 WHERE id = $3`, [req.user.id, notes || "Admin force release", id]);
     await query(`UPDATE listings SET status = 'sold' WHERE id = $1`, [escrow.listing_id]);
     await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'escrow_released', ' Funds Released', 'An admin has released your escrow funds. They should reflect in your M-Pesa shortly.')`, [escrow.seller_id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "escrow_release", targetType: "escrow", targetId: id, details: { listing_id: escrow.listing_id, seller_id: escrow.seller_id, notes }, ip: req.ip });
     res.json({ message: "Escrow released successfully" });
   } catch (err) { next(err); }
 });
@@ -187,6 +190,7 @@ router.post("/disputes/:id/resolve", async (req, res, next) => {
     await query(`UPDATE escrows SET status = $1, released_at = NOW(), released_by = $2 WHERE id = $3`, [escrowStatus, req.user.id, dispute.escrow_id]);
     const notifyUserId = release_to === "seller" ? escrow.seller_id : escrow.buyer_id;
     await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'dispute_resolved', 'Dispute Resolved', $2)`, [notifyUserId, `Your dispute has been resolved in your favour. Resolution: ${resolution}`]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "dispute_resolve", targetType: "dispute", targetId: id, details: { resolution, release_to, escrow_id: dispute.escrow_id }, ip: req.ip });
     res.json({ message: "Dispute resolved" });
   } catch (err) { next(err); }
 });
@@ -214,6 +218,7 @@ router.post("/users/:id/suspend", async (req, res, next) => {
     const { id } = req.params;
     const { suspend } = req.body;
     await query(`UPDATE users SET is_suspended = $1 WHERE id = $2`, [!!suspend, id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: suspend ? "user_suspend" : "user_unsuspend", targetType: "user", targetId: id, ip: req.ip });
     res.json({ message: `User ${suspend ? "suspended" : "unsuspended"}` });
   } catch (err) { next(err); }
 });
@@ -254,6 +259,7 @@ router.post("/users/:id/warn", async (req, res, next) => {
     await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)`, [user.id, notif.type, notif.title, notif.body]);
     pushNotification(user.id, notif);
     sendEmail(user.email, user.name, notif.title, notif.body).catch(() => {});
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "user_warn", targetType: "user", targetId: req.params.id, details: { reason, violation_count: user.violation_count, strikes_left: strikesLeft }, ip: req.ip });
     res.json({ message: `Warning issued (strike ${user.violation_count} of ${MAX_WARNINGS})`, violation_count: user.violation_count, strikes_left: strikesLeft });
   } catch (err) { next(err); }
 });
@@ -277,6 +283,7 @@ router.patch("/users/:id/role", async (req, res, next) => {
     if (!["buyer","seller","admin"].includes(role)) return res.status(400).json({ error: "Invalid role" });
     const { rows } = await query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, email, role`, [role, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "User not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "user_role_change", targetType: "user", targetId: req.params.id, details: { new_role: role }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -362,6 +369,7 @@ router.patch("/listings/:id", async (req, res, next) => {
         [rows[0].seller_id, `An admin edited your listing "${rows[0].title}". Fields changed: ${changed}. If you have questions, contact support@wekasoko.co.ke`, JSON.stringify({ listing_id: req.params.id, changed_fields: Object.keys(req.body) })]
       ).catch(() => {});
     }
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_edit", targetType: "listing", targetId: req.params.id, details: { changed_fields: Object.keys(req.body), title: rows[0].title }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -379,6 +387,7 @@ router.delete("/listings/:id", async (req, res, next) => {
     await query(`DELETE FROM notifications WHERE data::text LIKE $1`, [`%${id}%`]).catch(()=>{});
     await query(`DELETE FROM reviews WHERE listing_id=$1`, [id]).catch(()=>{});
     await query(`DELETE FROM listings WHERE id=$1`, [id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_delete", targetType: "listing", targetId: id, ip: req.ip });
     res.json({ message: "Listing permanently deleted" });
   } catch (err) { console.error("[Admin delete listing]", err.message); next(err); }
 });
@@ -390,6 +399,7 @@ router.post("/listings/:id/free-unlock", async (req, res, next) => {
     const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
     await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'admin_unlock', 'Admin Unlocked', 'An admin has unlocked this listing for free. You can now see the buyer contact details.')`, [rows[0].seller_id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_free_unlock", targetType: "listing", targetId: id, details: { title: rows[0].title }, ip: req.ip });
     res.json({ message: "Listing unlocked for free", listing: rows[0] });
   } catch (err) { next(err); }
 });
@@ -402,6 +412,7 @@ router.post("/listings/:id/restore", async (req, res, next) => {
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_restore", targetType: "listing", targetId: req.params.id, details: { title: rows[0].title }, ip: req.ip });
     res.json({ ok: true, listing: rows[0] });
   } catch (err) { next(err); }
 });
@@ -425,6 +436,7 @@ router.post("/escrows/:id/approve", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE escrows SET admin_approved=TRUE, approved_by=$1, approved_at=NOW() WHERE id=$2 RETURNING *`, [req.user.id, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "escrow_approve", targetType: "escrow", targetId: req.params.id, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -434,6 +446,7 @@ router.post("/escrows/:id/refund", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE escrows SET status='refunded', released_at=NOW(), released_by=$1, notes='Admin refund' WHERE id=$2 RETURNING *`, [req.user.id, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "escrow_refund", targetType: "escrow", targetId: req.params.id, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -455,6 +468,7 @@ router.post("/vouchers", async (req, res, next) => {
       `INSERT INTO vouchers (code, type, discount_percent, description, max_uses, expires_at, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [finalCode, type || "unlock", discount_percent || 100, description, max_uses || 50, expires_at || null, req.user.id]
     );
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "voucher_create", targetType: "voucher", targetId: rows[0].id, details: { code: finalCode, discount_percent: rows[0].discount_percent }, ip: req.ip });
     res.status(201).json(rows[0]);
   } catch (err) {
     if (err.code === "23505") return res.status(409).json({ error: "Code already exists" });
@@ -466,6 +480,7 @@ router.post("/vouchers", async (req, res, next) => {
 router.patch("/vouchers/:id/toggle", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE vouchers SET active=NOT active WHERE id=$1 RETURNING *`, [req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: rows[0].active ? "voucher_enable" : "voucher_disable", targetType: "voucher", targetId: req.params.id, details: { code: rows[0].code }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -592,6 +607,7 @@ router.post("/listings/:id/mark-sold", async (req, res, next) => {
       body: `"${listing.title}" has been marked as sold ${channelLabel}.`,
     });
 
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_mark_sold", targetType: "listing", targetId: id, details: { title: listing.title, sold_channel }, ip: req.ip });
     res.json({ ok: true, message: `Listing marked as sold (${sold_channel})` });
   } catch (err) { next(err); }
 });
@@ -617,6 +633,7 @@ router.patch("/reports/:id", async (req, res, next) => {
     const { action } = req.body;
     if (!["resolve","dismiss"].includes(action)) return res.status(400).json({ error: "action must be resolve or dismiss" });
     await query(`UPDATE listing_reports SET status=$1, resolved_by=$2, resolved_at=NOW() WHERE id=$3`, [action === "resolve" ? "resolved" : "dismissed", req.user.id, req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: `report_${action}`, targetType: "report", targetId: req.params.id, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -639,6 +656,7 @@ router.get("/reviews", async (req, res, next) => {
 router.delete("/reviews/:id", async (req, res, next) => {
   try {
     await query(`DELETE FROM reviews WHERE id=$1`, [req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "review_delete", targetType: "review", targetId: req.params.id, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -652,7 +670,9 @@ router.delete("/users/:id", async (req, res, next) => {
     const { rows: target } = await query(`SELECT role FROM users WHERE id=$1`, [id]);
     if (!target.length) return res.status(404).json({ error: "User not found" });
     if (target[0].role === "admin") return res.status(403).json({ error: "Admin accounts cannot be deleted here. Use the Team Management section." });
+    const { rows: uInfo } = await query(`SELECT name, email FROM users WHERE id=$1`, [id]).catch(()=>({rows:[]}));
     await purgeUser(id);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "user_delete", targetType: "user", targetId: id, details: { name: uInfo[0]?.name, email: uInfo[0]?.email }, ip: req.ip });
     res.json({ message: "User and all data permanently deleted" });
   } catch (err) { console.error("[Admin delete user FATAL]", err.message); next(err); }
 });
@@ -762,6 +782,7 @@ router.post("/invite", async (req, res, next) => {
     await sendEmail(email, name, "You have been invited to Weka Soko Admin",
       `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
     );
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level }, ip: req.ip });
     res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
   } catch (err) { console.error("[Admin invite]", err.message); next(err); }
 });
@@ -771,6 +792,7 @@ router.patch("/admins/:id/level", async (req, res, next) => {
     const { admin_level } = req.body;
     if (!["viewer","moderator","manager","super"].includes(admin_level)) return res.status(400).json({ error: "Invalid level" });
     await query(`UPDATE users SET admin_level=$1 WHERE id=$2 AND role='admin'`, [admin_level, req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_level_change", targetType: "user", targetId: req.params.id, details: { new_level: admin_level }, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -778,6 +800,7 @@ router.patch("/admins/:id/level", async (req, res, next) => {
 router.delete("/admins/:id", async (req, res, next) => {
   try {
     await query(`UPDATE users SET role='buyer', admin_level=NULL WHERE id=$1`, [req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_revoke", targetType: "user", targetId: req.params.id, ip: req.ip });
     res.json({ ok: true, message: "Admin access revoked" });
   } catch (err) { next(err); }
 });
@@ -825,6 +848,7 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
     sendEmail(listing.email, listing.name, "Your ad is live on Weka Soko!",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" has been approved and is now live.\n\n${FRONTEND}\n\nGood luck with your sale!\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation approve email]", e.message));
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_approve", targetType: "listing", targetId: id, details: { title: listing.title }, ip: req.ip });
     res.json({ ok: true, message: "Listing approved and live" });
 
     // Async: notify buyers whose requests match this newly approved listing
@@ -884,6 +908,7 @@ router.post("/moderation/:id/reject", async (req, res, next) => {
     sendEmail(listing.email, listing.name, "Your Weka Soko ad was not approved",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" was not approved.\n\nReason: ${reason.trim()}\n\nYou can edit and resubmit at:\n${FRONTEND}\n\nQuestions? Contact support@wekasoko.co.ke\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation reject email]", e.message));
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_reject", targetType: "listing", targetId: id, details: { title: listing.title, reason: reason.trim() }, ip: req.ip });
     res.json({ ok: true, message: "Listing rejected, seller notified" });
   } catch (err) { next(err); }
 });
@@ -908,6 +933,7 @@ router.post("/moderation/:id/request-changes", async (req, res, next) => {
     sendEmail(listing.email, listing.name, "Changes needed on your Weka Soko ad",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" needs changes before going live.\n\nNote: ${note.trim()}\n\nEdit it at:\n${FRONTEND}\n\nOnce updated it will be re-reviewed automatically.\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation changes email]", e.message));
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_request_changes", targetType: "listing", targetId: id, details: { title: listing.title, note: note.trim() }, ip: req.ip });
     res.json({ ok: true, message: "Change request sent to seller" });
   } catch (err) { next(err); }
 });
@@ -1051,7 +1077,6 @@ router.post("/seed-test-data", requireAuth, requireAdmin, async (req, res, next)
 });
 
 // ── RISK 10: ADMIN AUDIT LOG ──────────────────────────────────────────────────
-const { auditLog } = require("../services/audit.service");
 
 router.get("/audit-log", requireAuth, requireAdmin, async (req, res, next) => {
   try {
