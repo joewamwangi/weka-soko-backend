@@ -1136,4 +1136,50 @@ router.post("/broadcast", requireAuth, requireAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── POST /api/admin/listings/:id/discount ──────────────────────────────────────
+// Grant a flat KSh discount on the unlock fee for a specific listing.
+// discount_amount = 0-250 (250 = free unlock). Seller is notified immediately.
+router.post("/listings/:id/discount", requireAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const discount = parseInt(req.body.discount_amount);
+    const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "250");
+    if (isNaN(discount) || discount < 0 || discount > UNLOCK_FEE)
+      return res.status(400).json({ error: `discount_amount must be between 0 and ${UNLOCK_FEE}` });
+
+    const { rows } = await query(
+      `SELECT l.id, l.title, l.seller_id, u.name AS seller_name, u.email AS seller_email
+       FROM listings l JOIN users u ON u.id = l.seller_id
+       WHERE l.id = $1 AND l.status != 'deleted'`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    const listing = rows[0];
+
+    await query(`UPDATE listings SET unlock_discount = $1 WHERE id = $2`, [discount, id]);
+
+    const finalFee = Math.max(0, UNLOCK_FEE - discount);
+    const notifTitle = discount >= UNLOCK_FEE
+      ? "Free unlock granted for your listing!"
+      : `Discount applied — only KSh ${finalFee} to unlock your listing`;
+    const notifBody = discount >= UNLOCK_FEE
+      ? `Good news! The admin has granted a FREE unlock for "${listing.title}". You can now reveal your buyer's contact at no cost.`
+      : `The admin has applied a KSh ${discount} discount on the unlock fee for "${listing.title}". You only need to pay KSh ${finalFee} (was KSh ${UNLOCK_FEE}) to reveal your buyer's contact.`;
+
+    await query(
+      `INSERT INTO notifications (user_id, type, title, body, data)
+       VALUES ($1, 'unlock_discount', $2, $3, $4)`,
+      [listing.seller_id, notifTitle, notifBody, JSON.stringify({ listing_id: id, discount, final_fee: finalFee })]
+    ).catch(() => {});
+    pushNotification(listing.seller_id, { type: "unlock_discount", title: notifTitle, body: notifBody });
+
+    const { sendEmail } = require("../services/email.service");
+    sendEmail(listing.seller_email, listing.seller_name, notifTitle, notifBody).catch(() => {});
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "unlock_discount", targetType: "listing", targetId: id, details: { discount, final_fee: finalFee, title: listing.title }, ip: req.ip });
+
+    res.json({ ok: true, listing_id: id, discount, final_fee: finalFee });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

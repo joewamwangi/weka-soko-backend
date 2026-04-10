@@ -464,6 +464,10 @@ async function runMigration() {
     // Risk 3: track seller listing count so frontend can warn buyers about new sellers
     await addCol("users","total_listings_posted","INT DEFAULT 0");
 
+    // ── ADMIN UNLOCK DISCOUNT ──────────────────────────────────────────────────
+    // Admin can grant a KSh discount (or full free unlock) on the KSh 250 unlock fee
+    await addCol("listings","unlock_discount","INT DEFAULT 0");
+
     await client.query("COMMIT");
     console.log(" DB migration complete");
 

@@ -35,7 +35,10 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
       if (vrows.length) { voucherRow = vrows[0]; discountPct = voucherRow.discount_percent || 0; }
     }
 
-    const finalAmount = Math.max(0, Math.round(UNLOCK_FEE * (1 - discountPct / 100)));
+    // Admin discount (flat KSh amount) applied before percentage voucher discount
+    const adminDiscount = parseInt(listing.unlock_discount || 0);
+    const baseAmount = Math.max(0, UNLOCK_FEE - adminDiscount);
+    const finalAmount = Math.max(0, Math.round(baseAmount * (1 - discountPct / 100)));
 
     const { rows: existingPayment } = await query(
       `SELECT id FROM payments WHERE listing_id = $1 AND type = 'unlock' AND status = 'confirmed'`,
