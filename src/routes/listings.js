@@ -349,7 +349,7 @@ router.get("/:id", optionalAuth, async (req, res, next) => {
               COUNT(rv.id) AS seller_review_count
        FROM listings l
        JOIN users u ON u.id=l.seller_id
-       LEFT JOIN reviews rv ON rv.seller_id=l.seller_id
+       LEFT JOIN reviews rv ON rv.reviewee_id=l.seller_id
        WHERE l.id=$1
        GROUP BY l.id,u.name,u.phone,u.email,u.anon_tag`,
       [req.params.id]
