@@ -5,6 +5,7 @@ const { requireAuth } = require("../middleware/auth");
 const { initiateSTKPush, handleCallback, querySTKStatus } = require("../services/mpesa.service");
 
 const router = express.Router();
+const { sendPushToUser } = require("./push");
 const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "250");
 const ESCROW_FEE_PCT = parseFloat(process.env.ESCROW_FEE_PERCENT || "5.5") / 100;
 
@@ -58,6 +59,10 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
         `SELECT l.*, u.name AS seller_name, u.phone AS seller_phone, u.email AS seller_email FROM listings l JOIN users u ON u.id = l.seller_id WHERE l.id = $1`,
         [listing_id]
       );
+      // Notify seller their contact info is now visible
+      const unlockPayload = { type: "listing_unlocked", title: "🔓 Contact Info Unlocked!", body: `Your listing "${listing.title}" is now unlocked. Buyers can see your contact info.`, data: { listing_id } };
+      await query(`INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`, [listing.seller_id, unlockPayload.type, unlockPayload.title, unlockPayload.body, JSON.stringify(unlockPayload.data)]).catch(()=>{});
+      sendPushToUser(listing.seller_id, unlockPayload).catch(()=>{});
       return res.json({ unlocked: true, listing: unlocked[0], message: "Contact details unlocked via voucher!" });
     }
 
@@ -144,8 +149,15 @@ router.post("/escrow/:id/confirm-receipt", requireAuth, async (req, res, next) =
     if (!rows.length) return res.status(404).json({ error: "Escrow not found or not yours" });
     await query(`UPDATE escrows SET buyer_confirmed=TRUE, buyer_confirmed_at=NOW(), status='released', released_at=NOW(), released_by=$1 WHERE id=$2`, [req.user.id, req.params.id]);
     await query(`UPDATE listings SET status='sold' WHERE id=$1`, [rows[0].listing_id]);
-    await query(`INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'escrow_released','Funds Released!',$2,$3)`,
-      [rows[0].seller_id, "The buyer has confirmed receipt. Your funds have been released.", JSON.stringify({ escrow_id: req.params.id })]);
+    const escrowReleasePayload = {
+      type: "escrow_released",
+      title: "💰 Funds Released!",
+      body: "The buyer confirmed receipt. Your payment has been released — check your M-Pesa.",
+      data: { escrow_id: req.params.id }
+    };
+    await query(`INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'escrow_released','💰 Funds Released!',$2,$3)`,
+      [rows[0].seller_id, escrowReleasePayload.body, JSON.stringify({ escrow_id: req.params.id })]);
+    sendPushToUser(rows[0].seller_id, escrowReleasePayload).catch(()=>{});
     res.json({ message: "Receipt confirmed. Funds released to seller." });
   } catch (err) { next(err); }
 });

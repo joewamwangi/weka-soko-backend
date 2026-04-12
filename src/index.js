@@ -25,6 +25,7 @@ const reviewRoutes = require("./routes/reviews");
 const requestRoutes = require("./routes/requests");
 const pitchRoutes = require("./routes/pitches");
 const pushRoutes = require("./routes/push");
+const { sendPushToUser } = require("./routes/push");
 const { maintenanceMiddleware } = require("./middleware/maintenance");
 
 const app = express();
@@ -115,12 +116,15 @@ io.on("connection", (socket) => {
               JSON.stringify({ listing_id: listingId })
             ]
           ).catch(()=>{});
-          io.to(`user:${listing.seller_id}`).emit("notification", {
+          const chatOpenedPayload = {
             type: "chat_opened",
-            title: "Someone is interested!",
+            title: "Someone is interested! 👀",
             body: `${buyerTag} opened a chat on your listing.`,
             data: { listing_id: listingId }
-          });
+          };
+          io.to(`user:${listing.seller_id}`).emit("notification", chatOpenedPayload);
+          // Also send a Web Push so seller sees it even if the app is closed
+          sendPushToUser(listing.seller_id, chatOpenedPayload).catch(()=>{});
         }
       }
     } catch (err) {
@@ -272,21 +276,25 @@ io.on("connection", (socket) => {
 
       const actualNotifyId = receiverId;
       if (actualNotifyId) {
+        const senderTag = socket.listingAnonTag || socket.user.anon_tag || "Someone";
         await query(
           `INSERT INTO notifications (user_id, type, title, body, data)
            VALUES ($1, 'new_message', 'New Message', $2, $3)`,
           [
             actualNotifyId,
-            `${socket.listingAnonTag || socket.user.anon_tag || "Someone"}: ${body.trim().slice(0, 80)}${body.length > 80 ? "..." : ""}`,
+            `${senderTag}: ${body.trim().slice(0, 80)}${body.length > 80 ? "..." : ""}`,
             JSON.stringify({ listing_id: listingId, sender_id: socket.user.id }),
           ]
         ).catch(() => {});
-        io.to(`user:${actualNotifyId}`).emit("notification", {
+        const newMsgPayload = {
           type: "new_message",
-          title: "New Message",
-          body: `${socket.listingAnonTag || socket.user.anon_tag || "Someone"}: ${body.trim().slice(0, 60)}`,
+          title: "💬 New Message",
+          body: `${senderTag}: ${body.trim().slice(0, 60)}`,
           data: { listing_id: listingId },
-        });
+        };
+        io.to(`user:${actualNotifyId}`).emit("notification", newMsgPayload);
+        // Push notification — fires even if browser/app is closed
+        sendPushToUser(actualNotifyId, newMsgPayload).catch(() => {});
         query(`SELECT name, email FROM users WHERE id = $1`, [actualNotifyId]).then(r => {
           if (r.rows.length) {
             const u = r.rows[0];
