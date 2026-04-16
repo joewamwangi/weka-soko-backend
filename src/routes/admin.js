@@ -269,7 +269,7 @@ router.get("/payments", async (req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT p.*, u.name AS payer_name, u.email AS payer_email, l.title AS listing_title
-       FROM payments p JOIN users u ON u.id = p.payer_id JOIN listings l ON l.id = p.listing_id
+       FROM payments p JOIN users u ON u.id = p.payer_id LEFT JOIN listings l ON l.id = p.listing_id
        ORDER BY p.created_at DESC LIMIT 200`
     );
     res.json(rows);
@@ -844,7 +844,21 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
       [listing.seller_id, `Great news! Your listing "${listing.title}" has been approved and is now live on Weka Soko.`, JSON.stringify({ listing_id: id })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
+    if (io) {
+      // Notify the seller their ad is live
+      io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "🎉 Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
+      // Global feed refresh — sends the full listing object to all connected users
+      query(
+        `SELECT l.id, l.title, l.description, l.category, l.subcat, l.price, l.location, l.county,
+                l.seller_id, l.view_count, l.interest_count, l.created_at, l.expires_at,
+                l.listing_anon_tag AS seller_anon,
+                u.avg_rating AS seller_avg_rating, u.review_count AS seller_review_count,
+                COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+         FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1`, [id]
+      ).then(({ rows: lRows }) => {
+        if (lRows.length) io.emit("new_listing", lRows[0]);
+      }).catch(() => {});
+    }
     sendEmail(listing.email, listing.name, "Your ad is live on Weka Soko!",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" has been approved and is now live.\n\n${FRONTEND}\n\nGood luck with your sale!\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation approve email]", e.message));

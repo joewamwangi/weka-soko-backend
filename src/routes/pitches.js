@@ -185,7 +185,10 @@ router.get("/for-request/:requestId", requireAuth, async (req, res, next) => {
     if (reqRows[0].user_id !== req.user.id) return res.status(403).json({ error: "Not your request" });
     const { rows } = await query(
       `SELECT p.id, p.message, p.offered_price, p.status, p.created_at,
-              u.anon_tag AS seller_anon
+              u.anon_tag AS seller_anon,
+              CASE WHEN p.status='accepted' THEN u.name ELSE NULL END AS seller_name,
+              CASE WHEN p.status='accepted' THEN u.phone ELSE NULL END AS seller_phone,
+              CASE WHEN p.status='accepted' THEN u.email ELSE NULL END AS seller_email
        FROM seller_pitches p JOIN users u ON u.id=p.seller_id
        WHERE p.request_id=$1 AND p.status!='withdrawn' ORDER BY p.created_at DESC`,
       [req.params.requestId]

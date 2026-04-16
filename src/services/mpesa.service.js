@@ -179,19 +179,40 @@ async function handleCallback(body) {
       [payment.pitch_id]
     );
     const { rows: pitchData } = await query(
-      `SELECT p.seller_id, r.title AS request_title
-       FROM seller_pitches p JOIN buyer_requests r ON r.id = p.request_id
+      `SELECT p.seller_id, p.request_id, r.title AS request_title, r.user_id AS buyer_id,
+              u.name AS seller_name, u.phone AS seller_phone, u.email AS seller_email
+       FROM seller_pitches p
+       JOIN buyer_requests r ON r.id = p.request_id
+       JOIN users u ON u.id = p.seller_id
        WHERE p.id = $1`,
       [payment.pitch_id]
     );
     if (pitchData.length) {
+      const pd = pitchData[0];
+      // Notify seller their pitch was accepted
       await query(
         `INSERT INTO notifications (user_id,type,title,body,data)
          VALUES ($1,'pitch_accepted','Your pitch was accepted!',$2,$3)`,
         [
-          pitchData[0].seller_id,
-          `A buyer accepted your pitch on "${pitchData[0].request_title}". They now have your contact details.`,
-          JSON.stringify({ pitch_id: payment.pitch_id })
+          pd.seller_id,
+          `A buyer accepted your pitch on "${pd.request_title}". They now have your contact details.`,
+          JSON.stringify({ pitch_id: payment.pitch_id, request_id: pd.request_id })
+        ]
+      ).catch(() => {});
+      // Notify buyer with seller's contact details
+      await query(
+        `INSERT INTO notifications (user_id,type,title,body,data)
+         VALUES ($1,'seller_contact_revealed','Seller contact revealed!',$2,$3)`,
+        [
+          pd.buyer_id,
+          `You can now contact ${pd.seller_name} about your request "${pd.request_title}".`,
+          JSON.stringify({
+            pitch_id: payment.pitch_id,
+            request_id: pd.request_id,
+            seller_name: pd.seller_name,
+            seller_phone: pd.seller_phone,
+            seller_email: pd.seller_email
+          })
         ]
       ).catch(() => {});
     }
