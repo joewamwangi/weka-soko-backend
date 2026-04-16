@@ -250,7 +250,8 @@ router.get("/me", requireAuth, async (req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT id,name,email,role,admin_level,anon_tag,phone,avatar_url,is_verified,
-              response_rate,avg_response_hours,account_status,whatsapp_phone,created_at
+              response_rate,avg_response_hours,account_status,whatsapp_phone,created_at,
+              (google_id IS NOT NULL) AS is_google_user
        FROM users WHERE id=$1`,
       [req.user.id]
     );
