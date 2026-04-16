@@ -370,6 +370,11 @@ router.patch("/listings/:id", async (req, res, next) => {
       ).catch(() => {});
     }
     await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_edit", targetType: "listing", targetId: req.params.id, details: { changed_fields: Object.keys(req.body), title: rows[0].title }, ip: req.ip });
+    // Remove from live feeds if listing is no longer active
+    if(status&&["sold","flagged","rejected","archived","deleted"].includes(status)){
+      const ioInst=req.app?.get("io");
+      if(ioInst)ioInst.emit("listing_removed",{id:req.params.id});
+    }
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -387,6 +392,8 @@ router.delete("/listings/:id", async (req, res, next) => {
     await query(`DELETE FROM notifications WHERE data::text LIKE $1`, [`%${id}%`]).catch(()=>{});
     await query(`DELETE FROM reviews WHERE listing_id=$1`, [id]).catch(()=>{});
     await query(`DELETE FROM listings WHERE id=$1`, [id]);
+    const io=req.app?.get("io");
+    if(io)io.emit("listing_removed",{id});
     await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_delete", targetType: "listing", targetId: id, ip: req.ip });
     res.json({ message: "Listing permanently deleted" });
   } catch (err) { console.error("[Admin delete listing]", err.message); next(err); }
@@ -980,7 +987,10 @@ router.post("/moderation/:id/reject", async (req, res, next) => {
       [listing.seller_id, `Your listing "${listing.title}" was not approved. Reason: ${reason.trim()}`, JSON.stringify({ listing_id: id, reason: reason.trim() })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_rejected", title: "Ad Not Approved", body: `"${listing.title}" — ${reason.trim().slice(0, 80)}`, data: { listing_id: id } });
+    if (io) {
+      io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_rejected", title: "Ad Not Approved", body: `"${listing.title}" — ${reason.trim().slice(0, 80)}`, data: { listing_id: id } });
+      io.emit("listing_removed", { id });
+    }
     sendEmail(listing.email, listing.name, "Your Weka Soko ad was not approved",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" was not approved.\n\nReason: ${reason.trim()}\n\nYou can edit and resubmit at:\n${FRONTEND}\n\nQuestions? Contact support@wekasoko.co.ke\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation reject email]", e.message));

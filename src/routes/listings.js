@@ -423,6 +423,8 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: "Not found" });
     if (rows[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });
     await query(`UPDATE listings SET status='deleted' WHERE id=$1`, [req.params.id]);
+    const io=req.app.get("io");
+    if(io)io.emit("listing_removed",{id:req.params.id});
     res.json({ message: "Listing deleted" });
   } catch (err) { next(err); }
 });
@@ -451,6 +453,8 @@ router.post("/:id/mark-sold", requireAuth, async (req, res, next) => {
       `UPDATE listings SET status='sold', sold_channel=$1, sold_at=NOW(), updated_at=NOW() WHERE id=$2`,
       [channel, listing.id]
     );
+    const io=req.app.get("io");
+    if(io)io.emit("listing_removed",{id:listing.id});
 
     // Notify admin
     try {
