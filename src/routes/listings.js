@@ -387,8 +387,9 @@ router.patch("/:id", requireAuth, upload.array("photos", 8), async (req, res, ne
     }
 
     const { rows: preEdit } = await query(`SELECT status FROM listings WHERE id=$1`, [id]);
-    const wasRejected = preEdit[0]?.status === "rejected";
-    const newStatus = wasRejected ? "pending_review" : undefined;
+    const prevStatus = preEdit[0]?.status;
+    // Always send back for review on edit, unless already in the review queue
+    const newStatus = prevStatus === "pending_review" ? undefined : "pending_review";
     const { rows } = await query(
       `UPDATE listings SET title=COALESCE($1,title), description=COALESCE($2,description),
        reason_for_sale=COALESCE($3,reason_for_sale), category=COALESCE($4,category),
