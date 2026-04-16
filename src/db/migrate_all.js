@@ -104,6 +104,7 @@ async function runMigration() {
     await addCol("listings","payment_expires_at","TIMESTAMPTZ");
     await addCol("listings","sold_at","TIMESTAMPTZ");
     await addCol("listings","sold_channel","VARCHAR(30)");
+    await addCol("listings","precise_location","TEXT");
     // NOTE: linked_request_id added AFTER buyer_requests table is created (below)
 
     // Backfill expires_at for existing listings that don't have one
@@ -268,6 +269,7 @@ async function runMigration() {
     // Voucher columns the code uses (migration originally used different names)
     await addCol("vouchers","active","BOOLEAN DEFAULT TRUE");
     await addCol("vouchers","discount_percent","INT DEFAULT 0");
+    await addCol("vouchers","description","TEXT");
 
     // ── PRICE OFFERS ──────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS price_offers (
@@ -324,6 +326,9 @@ async function runMigration() {
     await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS min_price NUMERIC(12,2)`).catch(()=>{});
     await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS max_price NUMERIC(12,2)`).catch(()=>{});
     await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS photos JSONB DEFAULT '[]'`).catch(()=>{});
+    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL`).catch(()=>{});
+    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`).catch(()=>{});
+    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT`).catch(()=>{});
 
     // Now safe to add FK column referencing buyer_requests
     await addCol("listings","linked_request_id","UUID REFERENCES buyer_requests(id) ON DELETE SET NULL");

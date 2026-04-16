@@ -58,6 +58,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
              CASE WHEN l.is_unlocked THEN u.name ELSE NULL END AS seller_name,
              CASE WHEN l.is_unlocked THEN u.phone ELSE NULL END AS seller_phone,
              CASE WHEN l.is_unlocked THEN u.email ELSE NULL END AS seller_email,
+             CASE WHEN l.is_unlocked THEN l.precise_location ELSE NULL END AS precise_location,
              u.response_rate, u.avg_response_hours,
              u.avg_rating AS seller_avg_rating, u.review_count AS seller_review_count,
              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
@@ -217,7 +218,7 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
 // ── POST /api/listings ────────────────────────────────────────────────────────
 router.post("/", requireAuth, upload.array("photos", 8), async (req, res, next) => {
   try {
-    const { title, description, reason_for_sale, category, subcat, price, location, county } = req.body;
+    const { title, description, reason_for_sale, category, subcat, price, location, county, precise_location } = req.body;
     if (!title || !description || !price) return res.status(400).json({ error: "title, description, and price are required" });
     const scanResult = scanListingForContact({ title, description, reason_for_sale, location });
     if (scanResult.blocked) return res.status(422).json({ error: `Field "${scanResult.field}" contains contact info (${scanResult.reason}). Please remove it.`, violations: [scanResult] });
@@ -243,11 +244,12 @@ router.post("/", requireAuth, upload.array("photos", 8), async (req, res, next) 
 
     const result = await withTransaction(async (client) => {
       const { rows } = await client.query(
-        `INSERT INTO listings (seller_id,title,description,reason_for_sale,category,subcat,price,location,county,listing_anon_tag,status,linked_request_id,is_contact_public)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review',$11,$12) RETURNING *`,
+        `INSERT INTO listings (seller_id,title,description,reason_for_sale,category,subcat,price,location,county,listing_anon_tag,status,linked_request_id,is_contact_public,precise_location)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review',$11,$12,$13) RETURNING *`,
         [req.user.id, title, description, reason_for_sale, category, subcat||null, parseFloat(price), location, resolvedCounty, genListingTag(),
          req.body.linked_request_id||null,
-         req.body.is_contact_public==='true']
+         req.body.is_contact_public==='true',
+         precise_location||null]
       );
       const listing = rows[0];
       if (preUploads.length) {
@@ -367,7 +369,7 @@ router.get("/:id", optionalAuth, async (req, res, next) => {
 router.patch("/:id", requireAuth, upload.array("photos", 8), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { title, description, reason_for_sale, category, subcat, price, location, county } = req.body;
+    const { title, description, reason_for_sale, category, subcat, price, location, county, precise_location } = req.body;
     const { rows: ex } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [id]);
     if (!ex.length) return res.status(404).json({ error: "Listing not found" });
     if (ex[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });
@@ -397,8 +399,9 @@ router.patch("/:id", requireAuth, upload.array("photos", 8), async (req, res, ne
        price=COALESCE($6,price), location=COALESCE($7,location), county=COALESCE($8,county),
        status=COALESCE($10,status),
        moderation_note=CASE WHEN $10='pending_review' THEN NULL ELSE moderation_note END,
+       precise_location=COALESCE($11,precise_location),
        updated_at=NOW() WHERE id=$9 RETURNING *`,
-      [title, description, reason_for_sale, category, subcat||null, price?parseFloat(price):null, location, resolvedCounty||null, id, newStatus||null]
+      [title, description, reason_for_sale, category, subcat||null, price?parseFloat(price):null, location, resolvedCounty||null, id, newStatus||null, precise_location||null]
     );
     if (patchUploads.length) {
       await Promise.all(patchUploads.map(({ url, public_id, sort_order }) =>
@@ -475,14 +478,43 @@ router.post("/:id/save", requireAuth, async (req, res, next) => {
     );
     if (rows.length) {
       await query(`DELETE FROM saved_listings WHERE user_id=$1 AND listing_id=$2`, [req.user.id, req.params.id]);
-      res.json({ saved: false });
-    } else {
-      await query(
-        `INSERT INTO saved_listings (user_id, listing_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-        [req.user.id, req.params.id]
-      );
-      res.json({ saved: true });
+      return res.json({ saved: false });
     }
+    await query(
+      `INSERT INTO saved_listings (user_id, listing_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+      [req.user.id, req.params.id]
+    );
+    res.json({ saved: true });
+
+    // Async: notify seller that a buyer saved their listing
+    (async () => {
+      try {
+        const { rows: ls } = await query(
+          `SELECT l.title, l.seller_id FROM listings l WHERE l.id=$1`,
+          [req.params.id]
+        );
+        if (!ls.length || ls[0].seller_id === req.user.id) return;
+        const { title, seller_id } = ls[0];
+        const notif = {
+          type: "buyer_saved",
+          title: "Someone saved your listing!",
+          body: `A buyer saved "${title}". Start a conversation to close the deal.`,
+        };
+        await query(
+          `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`,
+          [seller_id, notif.type, notif.title, notif.body, JSON.stringify({ listing_id: req.params.id, action: "open_chat" })]
+        );
+        const io = req.app?.get("io");
+        if (io) io.to(`user:${seller_id}`).emit("notification", notif);
+        const { sendPushToUser: push } = require("./push");
+        if (push) push(seller_id, {
+          title: notif.title,
+          body: notif.body,
+          tag: "buyer_saved",
+          url: `/dashboard?tab=chats&listing=${req.params.id}`
+        }).catch(() => {});
+      } catch (e) { console.error("[save-notify]", e.message); }
+    })();
   } catch (err) { next(err); }
 });
 

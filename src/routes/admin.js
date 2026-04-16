@@ -422,6 +422,7 @@ router.post("/listings/:id/unlock", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_unlock", targetType: "listing", targetId: req.params.id, details: { title: rows[0].title }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -526,11 +527,72 @@ router.get("/requests/:id/pitches", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── POST /api/admin/requests/:id/approve ─────────────────────────────────────
+router.post("/requests/:id/approve", async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `UPDATE buyer_requests SET status='active', approved_by=$1, approved_at=NOW(), updated_at=NOW()
+       WHERE id=$2 AND status='pending_review' RETURNING *`,
+      [req.user.id, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Request not found or already processed" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "request_approve", targetType: "buyer_request", targetId: req.params.id, details: { title: rows[0].title }, ip: req.ip });
+    const approved = rows[0];
+    res.json({ ok: true, request: approved });
+
+    // Async: notify matching sellers now that request is live
+    (async () => {
+      try {
+        const priceFilter = [];
+        const priceParams = [approved.user_id, approved.title];
+        if (approved.budget) { priceParams.push(parseFloat(approved.budget)); priceFilter.push(`l.price <= $${priceParams.length}`); }
+        if (approved.category) { priceParams.push(approved.category); priceFilter.push(`l.category ILIKE $${priceParams.length}`); }
+        const { rows: matches } = await query(
+          `SELECT DISTINCT l.seller_id, l.id AS listing_id
+           FROM listings l
+           WHERE l.status = 'active' AND l.seller_id != $1
+             AND (l.title ILIKE '%'||$2||'%' OR l.description ILIKE '%'||$2||'%' OR $2 ILIKE '%'||l.title||'%')
+             ${priceFilter.length ? 'AND ' + priceFilter.join(' AND ') : ''}
+           LIMIT 20`,
+          priceParams
+        );
+        const io = req.app?.get("io");
+        for (const m of matches) {
+          await query(
+            `INSERT INTO notifications (user_id,type,title,body,data)
+             VALUES ($1,'listing_match','A buyer wants what you have!',$2,$3)
+             ON CONFLICT DO NOTHING`,
+            [m.seller_id,
+             `A buyer is looking for "${approved.title}"${approved.budget ? ` — budget KSh ${parseFloat(approved.budget).toLocaleString()}` : ""}. You may have what they need!`,
+             JSON.stringify({ request_id: approved.id, listing_id: m.listing_id })]
+          ).catch(() => {});
+          if (io) io.to(`user:${m.seller_id}`).emit("notification", { type: "listing_match", title: "A buyer wants what you have!", body: `Someone is looking for "${approved.title}"`, data: { request_id: approved.id } });
+        }
+      } catch (e) { /* non-critical */ }
+    })();
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/requests/:id/reject ──────────────────────────────────────
+router.post("/requests/:id/reject", async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    const { rows } = await query(
+      `UPDATE buyer_requests SET status='rejected', rejection_reason=$1, updated_at=NOW()
+       WHERE id=$2 AND status='pending_review' RETURNING id,title,status`,
+      [reason || null, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Request not found or already processed" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "request_reject", targetType: "buyer_request", targetId: req.params.id, details: { title: rows[0].title, reason }, ip: req.ip });
+    res.json({ ok: true, request: rows[0] });
+  } catch (err) { next(err); }
+});
+
 // ── PATCH /api/admin/requests/:id/status ─────────────────────────────────────
 router.patch("/requests/:id/status", async (req, res, next) => {
   try {
     const { status } = req.body;
-    const validStatuses = ["active","closed","archived","expired"];
+    const validStatuses = ["active","closed","archived","expired","pending_review","rejected"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Invalid status" });
     const { rows } = await query(
       `UPDATE buyer_requests SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id,title,status`,
