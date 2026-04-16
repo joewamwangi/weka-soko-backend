@@ -220,8 +220,6 @@ router.post("/", requireAuth, upload.array("photos", 8), async (req, res, next) 
   try {
     const { title, description, reason_for_sale, category, subcat, price, location, county, precise_location } = req.body;
     if (!title || !description || !price) return res.status(400).json({ error: "title, description, and price are required" });
-    const scanResult = scanListingForContact({ title, description, reason_for_sale, location });
-    if (scanResult.blocked) return res.status(422).json({ error: `Field "${scanResult.field}" contains contact info (${scanResult.reason}). Please remove it.`, violations: [scanResult] });
     const resolvedCounty = county || KENYA_COUNTIES.find(c => location && location.toLowerCase().includes(c.toLowerCase())) || null;
     // Upload photos to Cloudinary BEFORE opening the DB transaction.
     // This keeps the transaction fast and avoids holding a DB connection
@@ -374,8 +372,6 @@ router.patch("/:id", requireAuth, upload.array("photos", 8), async (req, res, ne
     if (!ex.length) return res.status(404).json({ error: "Listing not found" });
     if (ex[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });
     const resolvedCounty = county || (location ? KENYA_COUNTIES.find(c => location.toLowerCase().includes(c.toLowerCase())) : undefined);
-    const scanResult = scanListingForContact({ title, description, reason_for_sale, location });
-    if (scanResult.blocked) return res.status(422).json({ error: `Field "${scanResult.field}" contains contact info (${scanResult.reason}). Please remove it.`, violations: [scanResult] });
     // Upload new photos to Cloudinary BEFORE the DB update — same principle as POST.
     // Avoids making the user wait for Cloudinary while the DB is blocked.
     let patchUploads = [];
