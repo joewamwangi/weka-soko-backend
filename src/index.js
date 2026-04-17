@@ -11,7 +11,6 @@ const rateLimit = require("express-rate-limit");
 const { pool } = require("./db/pool");
 const { query } = require("./db/pool");
 const { startCronJobs } = require("./services/cron.service");
-
 const authRoutes = require("./routes/auth");
 const listingRoutes = require("./routes/listings");
 const paymentRoutes = require("./routes/payments");
@@ -27,25 +26,134 @@ const pitchRoutes = require("./routes/pitches");
 const pushRoutes = require("./routes/push");
 const { sendPushToUser } = require("./routes/push");
 const { maintenanceMiddleware } = require("./middleware/maintenance");
+const {
+  corsOrigin,
+  sanitizeInput,
+  apiLimiter,
+  searchLimiter,
+  listingCreateLimiter,
+  paymentLimiter,
+  aiSearchLimiter,
+  bruteForceProtection,
+  recordFailedAttempt,
+  clearFailedAttempts,
+} = require("./middleware/security");
 
 const app = express();
 const server = http.createServer(app);
 
+// ── Security Headers (Helmet) ─────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https://res.cloudinary.com", "https://*.cloudinary.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      connectSrc: ["'self'", "https://wekasokobackend.up.railway.app", "https://api.cloudinary.com"],
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: "same-origin" },
+  crossOriginResourcePolicy: { policy: "same-origin" },
+  dnsPrefetchControl: { allow: false },
+  frameguard: { action: "deny" },
+  hidePoweredBy: true,
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  ieNoOpen: true,
+  noSniff: true,
+  originAgentCluster: true,
+  permittedCrossDomainPolicies: { permittedPolicies: "none" },
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  xssFilter: true,
+}));
+
+// ── Trust Proxy (for rate limiting behind CDN/load balancer) ──────────────────
+app.set("trust proxy", 1);
+
+// ── CORS Configuration — Whitelist Only ───────────────────────────────────────
+app.use(cors({
+  origin: corsOrigin,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token", "X-Session-Id"],
+  exposedHeaders: ["X-Request-Id"],
+  maxAge: 86400,
+}));
+
+// ── Input Sanitization ────────────────────────────────────────────────────────
+app.use(sanitizeInput);
+
+app.use((req, _res, next) => {
+  if (req.query) {
+    for (const key of Object.keys(req.query)) {
+      if (Array.isArray(req.query[key])) req.query[key] = req.query[key][0];
+    }
+  }
+  next();
+});
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ── Request Logging ───────────────────────────────────────────────────────────
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+
+// ── Rate Limiting ─────────────────────────────────────────────────────────────
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please try again later." },
+  keyGenerator: (req) => req.user?.id || req.ip,
+  skip: (req) => req.path === "/health",
+});
+
+const authSlowDown = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many failed attempts. Please slow down." },
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => req.ip,
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  skipSuccessfulRequests: true,
+  message: { error: "Too many auth attempts." },
+  keyGenerator: (req) => req.ip,
+});
+
+const forgotLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: "Too many password reset requests. Please wait 1 hour." },
+  skipSuccessfulRequests: false,
+  keyGenerator: (req) => req.ip,
+});
+
+app.use(globalLimiter);
+
 // ── Socket.io Setup ───────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
-    origin: function(origin, callback) {
-      if (!origin) return callback(null, true);
-      const isVercel = /^https:\/\/weka-soko[^.]*\.vercel\.app$/.test(origin);
-      const allowed = [process.env.FRONTEND_URL, process.env.ADMIN_URL, "http://localhost:3000"].filter(Boolean);
-      if (isVercel || allowed.includes(origin)) callback(null, true);
-      else callback(null, true); // allow all for now
-    },
+    origin: corsOrigin,
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
-// Socket.io is handled directly below
+
 const jwt = require("jsonwebtoken");
 const { detectContactInfo, getSeverity } = require("./services/moderation.service");
 
@@ -73,10 +181,8 @@ const onlineUsers = new Map();
 
 io.on("connection", (socket) => {
   socket.join(`user:${socket.user.id}`);
-  // Mark user online
   onlineUsers.set(socket.user.id, socket.id);
   query(`UPDATE users SET is_online = TRUE, last_seen = NOW() WHERE id = $1`, [socket.user.id]).catch(()=>{});
-  // Broadcast online status to everyone in their listing rooms (updated when they join)
   socket.broadcast.emit("user_online", { userId: socket.user.id });
 
   socket.on("join_listing", async (listingId) => {
@@ -90,16 +196,14 @@ io.on("connection", (socket) => {
       const isSeller = listing.seller_id === socket.user.id;
 
       socket.listingId = listingId;
-      socket.isSeller  = isSeller;
-
+      socket.isSeller = isSeller;
       socket.listingAnonTag = isSeller
         ? (listing.listing_anon_tag || socket.user.anon_tag || "Unknown")
-        : (socket.user.anon_tag     || "Unknown");
+        : (socket.user.anon_tag || "Unknown");
 
       socket.join(`listing:${listingId}`);
       socket.emit("joined", { listingId, isSeller, anonTag: socket.listingAnonTag });
 
-      // Notify seller when a buyer opens the chat for the first time
       if (!isSeller) {
         const buyerTag = socket.user.anon_tag || "A buyer";
         const { rows: prevMsg } = await query(
@@ -113,17 +217,16 @@ io.on("connection", (socket) => {
             [
               listing.seller_id,
               `${buyerTag} opened a chat on your listing. They haven't messaged yet — they may be typing!`,
-              JSON.stringify({ listing_id: listingId })
+              JSON.stringify({ listing_id: listingId }),
             ]
           ).catch(()=>{});
           const chatOpenedPayload = {
             type: "chat_opened",
-            title: "Someone is interested! 👀",
+            title: "Someone is interested!",
             body: `${buyerTag} opened a chat on your listing.`,
-            data: { listing_id: listingId }
+            data: { listing_id: listingId },
           };
           io.to(`user:${listing.seller_id}`).emit("notification", chatOpenedPayload);
-          // Also send a Web Push so seller sees it even if the app is closed
           sendPushToUser(listing.seller_id, chatOpenedPayload).catch(()=>{});
         }
       }
@@ -144,7 +247,6 @@ io.on("connection", (socket) => {
       if (!listingRows.length) return;
       const listing = listingRows[0];
 
-      // Moderation (only if not yet unlocked)
       if (!listing.is_unlocked) {
         const violation = detectContactInfo(body);
         if (violation.blocked) {
@@ -177,8 +279,7 @@ io.on("connection", (socket) => {
             : `WARNING (${count}/3): Your message was blocked — it appeared to contain contact information ("${violation.reason}"). Contact info must stay hidden until the KSh 250 unlock is paid.`;
 
           await query(
-            `INSERT INTO notifications (user_id, type, title, body, data)
-             VALUES ($1, 'violation_warning', $2, $3, $4)`,
+            `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'violation_warning', $2, $3, $4)`,
             [
               socket.user.id,
               severity === "suspended" ? "Account Suspended" : "Message Blocked",
@@ -232,15 +333,12 @@ io.on("connection", (socket) => {
       }
 
       const isSenderSeller = listing.seller_id === socket.user.id;
-
       let receiverId;
       if (isSenderSeller) {
         receiverId = listing.locked_buyer_id;
         if (!receiverId) {
           const { rows: buyerRows } = await query(
-            `SELECT sender_id FROM chat_messages
-             WHERE listing_id = $1 AND sender_id != $2
-             ORDER BY created_at ASC LIMIT 1`,
+            `SELECT sender_id FROM chat_messages WHERE listing_id = $1 AND sender_id != $2 ORDER BY created_at ASC LIMIT 1`,
             [listingId, socket.user.id]
           );
           if (buyerRows.length) receiverId = buyerRows[0].sender_id;
@@ -255,8 +353,7 @@ io.on("connection", (socket) => {
       }
 
       const { rows: saved } = await query(
-        `INSERT INTO chat_messages (listing_id, sender_id, receiver_id, body)
-         VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+        `INSERT INTO chat_messages (listing_id, sender_id, receiver_id, body) VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
         [listingId, socket.user.id, receiverId, body.trim()]
       );
 
@@ -278,8 +375,7 @@ io.on("connection", (socket) => {
       if (actualNotifyId) {
         const senderTag = socket.listingAnonTag || socket.user.anon_tag || "Someone";
         await query(
-          `INSERT INTO notifications (user_id, type, title, body, data)
-           VALUES ($1, 'new_message', 'New Message', $2, $3)`,
+          `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'new_message', 'New Message', $2, $3)`,
           [
             actualNotifyId,
             `${senderTag}: ${body.trim().slice(0, 80)}${body.length > 80 ? "..." : ""}`,
@@ -288,12 +384,11 @@ io.on("connection", (socket) => {
         ).catch(() => {});
         const newMsgPayload = {
           type: "new_message",
-          title: "💬 New Message",
+          title: "New Message",
           body: `${senderTag}: ${body.trim().slice(0, 60)}`,
           data: { listing_id: listingId },
         };
         io.to(`user:${actualNotifyId}`).emit("notification", newMsgPayload);
-        // Push notification — fires even if browser/app is closed
         sendPushToUser(actualNotifyId, newMsgPayload).catch(() => {});
         query(`SELECT name, email FROM users WHERE id = $1`, [actualNotifyId]).then(r => {
           if (r.rows.length) {
@@ -322,6 +417,7 @@ io.on("connection", (socket) => {
       socket.to(`listing:${socket.listingId}`).emit("user_offline", { userId: socket.user.id, lastSeen: now });
     }
   });
+
   socket.on("stop_typing", (listingId) => {
     socket.to(`listing:${listingId}`).emit("user_stop_typing");
   });
@@ -329,122 +425,27 @@ io.on("connection", (socket) => {
   if (socket.user.role === "admin") socket.join("admin");
 });
 
-// Make io accessible in route handlers via req.app.get("io")
 app.set("io", io);
 
-// ── Express Middleware ─────────────────────────────────────────────────────────
-app.set("trust proxy", 1);
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
-      connectSrc: ["'self'", "https://wekasokobackend.up.railway.app"],
-    },
-  },
-  crossOriginEmbedderPolicy: false,
-}));
-app.use((req, _res, next) => {
-  if (req.query) {
-    for (const key of Object.keys(req.query)) {
-      if (Array.isArray(req.query[key])) req.query[key] = req.query[key][0];
-    }
-  }
-  next();
-});
-app.use((req, _res, next) => {
-  if (req.body && typeof req.body === "object") {
-    const sanitize = (val) => {
-      if (typeof val !== "string") return val;
-      return val.replace(/[<>]/g, (c) => (c === "<" ? "&lt;" : "&gt;"));
-    };
-    const sanitizeObj = (obj) => {
-      for (const k of Object.keys(obj)) {
-        if (typeof obj[k] === "string") obj[k] = sanitize(obj[k]);
-        else if (typeof obj[k] === "object" && obj[k] !== null) sanitizeObj(obj[k]);
-      }
-    };
-    sanitizeObj(req.body);
-  }
-  next();
-});
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    const allowed = [
-      process.env.FRONTEND_URL,
-      process.env.ADMIN_URL,
-      "http://localhost:3000",
-      "http://localhost:3001",
-    ].filter(Boolean);
-    const isVercel = /^https:\/\/weka-soko[^.]*\.vercel\.app$/.test(origin);
-    if (allowed.includes(origin) || isVercel) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Allow all origins for now — tighten after launch
-    }
-  },
-  credentials: true,
-}));
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-
-// Global rate limiter
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many requests. Please try again later." },
-  skip: (req) => req.path === "/health",
-});
-// Slow down repeated auth failures
-const authSlowDown = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: "Too many failed attempts. Please slow down." },
-  skipSuccessfulRequests: true,
-});
-app.use(globalLimiter);
-
-// Stricter limiter for auth (login/register)
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 50,
-  skipSuccessfulRequests: true,
-  message: { error: "Too many auth attempts." },
-});
-
-// Extra-strict limiter for password reset — 5 per IP per hour
-const forgotLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 5,
-  message: { error: "Too many password reset requests. Please wait 1 hour." },
-  skipSuccessfulRequests: false,
-});
-
 // ── Routes ────────────────────────────────────────────────────────────────────
-// ── Maintenance mode — checked before all public routes ───────────────────────
 app.use(maintenanceMiddleware);
 
 app.use("/api/auth/forgot-password", forgotLimiter);
-app.use("/api/auth/login", authSlowDown);
+app.use("/api/auth/login", bruteForceProtection, authSlowDown);
 app.use("/api/auth", authLimiter, authRoutes);
-app.use("/api/listings", listingRoutes);
-app.use("/api/payments", paymentRoutes);
+app.use("/api/listings", searchLimiter, listingRoutes);
+app.use("/api/listings/create", listingCreateLimiter, listingRoutes);
+app.use("/api/payments", paymentLimiter, paymentRoutes);
 app.use("/api/chat", chatRoutes);
 adminRoutes.setIO(io);
-app.use("/api/admin", adminRoutes);
-app.use("/api/notifications", notificationRoutes);
+app.use("/api/admin", apiLimiter, adminRoutes);
+app.use("/api/notifications", apiLimiter, notificationRoutes);
 app.use("/api/stats", statsRoutes);
 app.use("/api/vouchers", voucherRoutes);
-app.use("/api/reviews", reviewRoutes);
-app.use("/api/requests", requestRoutes);
-app.use("/api/pitches", pitchRoutes);
-app.use("/api/push", pushRoutes);
+app.use("/api/reviews", apiLimiter, reviewRoutes);
+app.use("/api/requests", apiLimiter, requestRoutes);
+app.use("/api/pitches", apiLimiter, pitchRoutes);
+app.use("/api/push", apiLimiter, pushRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
@@ -456,11 +457,14 @@ app.get("/health", async (req, res) => {
   }
 });
 
-// ── Global Error Handler ───────────────────────────────────────────────────────
+// ── Global Error Handler ──────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
   console.error(`[${status}] ${req.method} ${req.path} —`, err.message);
   if (status === 500) console.error(err.stack);
+  if (err.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "Invalid JSON payload" });
+  }
   res.status(status).json({ error: err.message || "Something went wrong" });
 });
 
@@ -472,15 +476,15 @@ app.use((req, res) => {
 // ── Start Server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 const { runMigration } = require("./db/migrate_all");
-
 runMigration().then(() => {
   server.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════╗
-║         WEKA SOKO API RUNNING          ║
-║   Port: ${PORT}  |  Env: ${process.env.NODE_ENV || "development"}        ║
+║         WEKA SOKO API RUNNING            ║
+║  Port: ${PORT} | Env: ${process.env.NODE_ENV || "development"}   ║
+║  Security: STRICT                        ║
 ╚══════════════════════════════════════════╝
-  `);
+    `);
     startCronJobs();
   });
 }).catch(err => {
@@ -488,4 +492,4 @@ runMigration().then(() => {
   process.exit(1);
 });
 
-module.exports = { app, server };
+module.exports = { app, server, recordFailedAttempt, clearFailedAttempts };
