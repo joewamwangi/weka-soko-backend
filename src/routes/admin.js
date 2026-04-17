@@ -371,16 +371,21 @@ router.get("/users/:id/listings", async (req, res, next) => {
 
 // ── GET /api/admin/listings ───────────────────────────────────────────────────
 router.get("/listings", async (req, res, next) => {
-  try {
-    const { status, search, seller_id, page = 1, limit = 50 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const conditions = [];
-    const params = [];
-    if (status) { params.push(status); conditions.push(`l.status = $${params.length}`); }
-    if (search) { params.push(`%${search}%`); conditions.push(`(l.title ILIKE $${params.length} OR u.name ILIKE $${params.length})`); }
-    if (seller_id) { params.push(seller_id); conditions.push(`l.seller_id = $${params.length}`); }
-    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    params.push(parseInt(limit), offset);
+try {
+const { status, search, seller_id } = req.query;
+let { page = 1, limit = 50 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 200) limit = 50;
+const offset = (page - 1) * limit;
+const conditions = [];
+const params = [];
+if (status) { params.push(status); conditions.push(`l.status = $${params.length}`); }
+if (search) { params.push(`%${search}%`); conditions.push(`(l.title ILIKE $${params.length} OR u.name ILIKE $${params.length})`); }
+if (seller_id) { params.push(seller_id); conditions.push(`l.seller_id = $${params.length}`); }
+const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.*, u.name AS seller_name, u.email AS seller_email, u.phone AS seller_phone,
        (SELECT COUNT(*) FROM payments p WHERE p.listing_id = l.id AND p.status='confirmed') AS payment_count,
@@ -658,11 +663,16 @@ router.patch("/vouchers/:id/toggle", async (req, res, next) => {
 
 // ── GET /api/admin/requests ───────────────────────────────────────────────────
 router.get("/requests", async (req, res, next) => {
-  try {
-    const { page=1, limit=50, status } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const conditions = status && status !== "all" ? [`r.status=$1`] : [];
-    const params = status && status !== "all" ? [status, parseInt(limit), offset] : [parseInt(limit), offset];
+try {
+const { status } = req.query;
+let { page=1, limit=50 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 200) limit = 50;
+const offset = (page - 1) * limit;
+const conditions = status && status !== "all" ? [`r.status=$1`] : [];
+const params = status && status !== "all" ? [status, limit, offset] : [limit, offset];
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     const limitIdx = params.length - 1;
     const offsetIdx = params.length;
@@ -786,18 +796,22 @@ router.delete("/requests/:id", async (req, res, next) => {
 
 // ── GET /api/admin/sold ───────────────────────────────────────────────────────
 router.get("/sold", async (req, res, next) => {
-  try {
-    const { page=1, limit=30 } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const { rows } = await query(
-      `SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel,
-       l.created_at, COALESCE(l.sold_at, l.updated_at) AS sold_at,
-       u.name AS seller_name, u.email AS seller_email,
-       u2.name AS buyer_name, u2.email AS buyer_email,
-       COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
-       FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
-       WHERE l.status='sold' ORDER BY COALESCE(l.sold_at, l.updated_at) DESC LIMIT $1 OFFSET $2`, [parseInt(limit), offset]
-    );
+try {
+let { page=1, limit=30 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 200) limit = 30;
+const offset = (page - 1) * limit;
+const { rows } = await query(
+`SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel,
+l.created_at, COALESCE(l.sold_at, l.updated_at) AS sold_at,
+u.name AS seller_name, u.email AS seller_email,
+u2.name AS buyer_name, u2.email AS buyer_email,
+COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
+WHERE l.status='sold' ORDER BY COALESCE(l.sold_at, l.updated_at) DESC LIMIT $1 OFFSET $2`, [limit, offset]
+);
     const { rows: cnt } = await query(`SELECT COUNT(*) FROM listings WHERE status='sold'`);
     res.json({ listings: rows, total: parseInt(cnt[0].count) });
   } catch (err) { next(err); }

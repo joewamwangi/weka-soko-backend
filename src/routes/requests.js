@@ -12,11 +12,16 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // ── GET /api/requests ──────────────────────────────────────────────────────
 // List all active buyer requests (paginated)
 router.get("/", optionalAuth, async (req, res, next) => {
-  try {
-    const { page = 1, limit = 20, county, search, category, subcat, min_price, max_price, sort = 'newest' } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const params = [];
-    const conditions = ["r.status = 'active'"];
+try {
+const { county, search, category, subcat, min_price, max_price, sort = 'newest' } = req.query;
+let { page = 1, limit = 20 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
+const offset = (page - 1) * limit;
+const params = [];
+const conditions = ["r.status = 'active'"];
 
     if (county) { params.push(county); conditions.push(`r.county ILIKE $${params.length}`); }
     if (search) { params.push(`%${search}%`); conditions.push(`(r.title ILIKE $${params.length} OR r.description ILIKE $${params.length})`); }
@@ -50,7 +55,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
       params.slice(0, -2)
     );
 
-    res.json({ requests: rows, total: parseInt(cnt[0].count), page: parseInt(page) });
+    res.json({ requests: rows, total: parseInt(cnt[0].count), page });
   } catch (err) { next(err); }
 });
 

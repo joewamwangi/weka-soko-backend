@@ -29,11 +29,16 @@ router.get("/counties", (req, res) => res.json(KENYA_COUNTIES));
 
 // ── GET /api/listings ─────────────────────────────────────────────────────────
 router.get("/", optionalAuth, async (req, res, next) => {
-  try {
-    const { category, subcat, search, minPrice, maxPrice, county, location, page=1, limit=20, sort="newest" } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const params = [];
-    const conditions = ["l.status='active'", "l.expires_at > NOW()"];
+try {
+const { category, subcat, search, minPrice, maxPrice, county, location, sort="newest" } = req.query;
+let { page=1, limit=20 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
+const offset = (page - 1) * limit;
+const params = [];
+const conditions = ["l.status='active'", "l.expires_at > NOW()"];
     if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
     if (subcat) { params.push(subcat); conditions.push(`l.subcat ILIKE $${params.length}`); }
     if (county) { params.push(county); conditions.push(`l.county ILIKE $${params.length}`); }
@@ -71,7 +76,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
     const { rows } = await query(sql, params);
     const countParams = params.slice(0,-2);
     const { rows: cnt } = await query(`SELECT COUNT(*) FROM listings l ${where}`, countParams);
-    res.json({ listings: rows, total: parseInt(cnt[0].count), page: parseInt(page), pages: Math.ceil(parseInt(cnt[0].count)/parseInt(limit)) });
+    res.json({ listings: rows, total: parseInt(cnt[0].count), page, pages: Math.ceil(parseInt(cnt[0].count)/limit) });
   } catch (err) { next(err); }
 });
 
@@ -125,14 +130,19 @@ router.get("/seller/sold", requireAuth, requireSeller, async (req, res, next) =>
 // ── GET /api/listings/sold ────────────────────────────────────────────────────
 // IMPORTANT: Must be before /:id
 router.get("/sold", optionalAuth, async (req, res, next) => {
-  try {
-    const { category, page=1, limit=20 } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const params = [];
-    const conditions = ["l.status='sold'"];
-    if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
-    const where = "WHERE " + conditions.join(" AND ");
-    params.push(parseInt(limit), offset);
+try {
+const { category } = req.query;
+let { page=1, limit=20 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
+const offset = (page - 1) * limit;
+const params = [];
+const conditions = ["l.status='sold'"];
+if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
+const where = "WHERE " + conditions.join(" AND ");
+params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
               l.view_count, l.interest_count, l.created_at, l.updated_at,
@@ -152,20 +162,25 @@ router.get("/sold", optionalAuth, async (req, res, next) => {
       params
     );
     const { rows: cnt } = await query(`SELECT COUNT(*) FROM listings l ${where}`, params.slice(0,-2));
-    res.json({ listings: rows, total: parseInt(cnt[0].count), page: parseInt(page), pages: Math.ceil(parseInt(cnt[0].count)/parseInt(limit)) });
+    res.json({ listings: rows, total: parseInt(cnt[0].count), page, pages: Math.ceil(parseInt(cnt[0].count)/limit) });
   } catch (err) { next(err); }
 });
 
 // ── GET /api/listings/sold/all ────────────────────────────────────────────────
 // IMPORTANT: Must be before /:id
 router.get("/sold/all", async (req, res, next) => {
-  try {
-    const { page=1, limit=20, category } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const params = [];
-    const conditions = ["l.status='sold'"];
-    if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
-    params.push(parseInt(limit), offset);
+try {
+const { category } = req.query;
+let { page=1, limit=20 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
+const offset = (page - 1) * limit;
+const params = [];
+const conditions = ["l.status='sold'"];
+if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
+params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
               l.view_count, l.interest_count, l.updated_at AS sold_at,
@@ -182,16 +197,21 @@ router.get("/sold/all", async (req, res, next) => {
 // ── GET /api/listings/admin/sold ──────────────────────────────────────────────
 // Admin only: Get all sold listings with seller and buyer info
 router.get("/admin/sold", requireAuth, async (req, res, next) => {
-  try {
-    const { q, page=1, limit=50 } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const params = [];
-    let where = "WHERE l.status='sold'";
-    if (q) {
-      params.push(`%${q}%`);
-      where += ` AND (l.title ILIKE $1 OR u.name ILIKE $1 OR u.email ILIKE $1)`;
-    }
-    params.push(parseInt(limit), offset);
+try {
+const { q } = req.query;
+let { page=1, limit=50 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 50;
+const offset = (page - 1) * limit;
+const params = [];
+let where = "WHERE l.status='sold'";
+if (q) {
+params.push(`%${q}%`);
+where += ` AND (l.title ILIKE $1 OR u.name ILIKE $1 OR u.email ILIKE $1)`;
+}
+params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
               l.view_count, l.interest_count, l.created_at,
