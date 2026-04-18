@@ -39,7 +39,7 @@ if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
 const offset = (page - 1) * limit;
 const params = [];
 const conditions = ["l.status='active'", "l.expires_at > NOW()"];
-    if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
+if (category) { params.push(category); conditions.push(`l.category ILIKE $${params.length}`); }
     if (subcat) { params.push(subcat); conditions.push(`l.subcat ILIKE $${params.length}`); }
     if (county) { params.push(county); conditions.push(`l.county ILIKE $${params.length}`); }
     if (minPrice) { params.push(parseFloat(minPrice)); conditions.push(`l.price>=$${params.length}`); }
@@ -140,9 +140,9 @@ if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
 const offset = (page - 1) * limit;
 const params = [];
 const conditions = ["l.status='sold'"];
-if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
-const where = "WHERE " + conditions.join(" AND ");
-params.push(limit, offset);
+if (category) { params.push(category); conditions.push(`l.category ILIKE $${params.length}`); }
+    const where = "WHERE " + conditions.join(" AND ");
+    params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
               l.view_count, l.interest_count, l.created_at, l.updated_at,
@@ -179,8 +179,8 @@ if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
 const offset = (page - 1) * limit;
 const params = [];
 const conditions = ["l.status='sold'"];
-if (category) { params.push(category); conditions.push(`l.category=$${params.length}`); }
-params.push(limit, offset);
+if (category) { params.push(category); conditions.push(`l.category ILIKE $${params.length}`); }
+    params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
               l.view_count, l.interest_count, l.updated_at AS sold_at,
