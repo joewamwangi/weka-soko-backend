@@ -509,34 +509,45 @@ router.post("/reset-password", async (req, res, next) => {
 
 // ── Google OAuth ────────────────────────────────────────────────────────────
 router.get("/google", (req, res) => {
-  const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID || "",
-    redirect_uri: `${process.env.BACKEND_URL || ""}/api/auth/google/callback`,
-    response_type: "code",
-    scope: "openid email profile",
-    access_type: "offline",
-    prompt: "select_account",
-  });
-  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
-});
+ const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "";
+ if (!process.env.GOOGLE_CLIENT_ID) {
+ return res.status(500).json({ error: "Google OAuth not configured. Please set GOOGLE_CLIENT_ID." });
+ }
+ const params = new URLSearchParams({
+ client_id: process.env.GOOGLE_CLIENT_ID,
+ redirect_uri: `${backendUrl}/api/auth/google/callback`,
+ response_type: "code",
+ scope: "openid email profile",
+ access_type: "offline",
+ prompt: "select_account",
+ });
+ res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+ });
 
 router.get("/google/callback", async (req, res) => {
-  const { code, error } = req.query;
-  if (error || !code) return res.redirect(`${FRONTEND}?auth_error=google_denied`);
-  try {
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: `${process.env.BACKEND_URL}/api/auth/google/callback`,
-        grant_type: "authorization_code",
-      }),
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) throw new Error("No access token from Google");
+ const { code, error } = req.query;
+ if (error || !code) return res.redirect(`${FRONTEND}?auth_error=google_denied`);
+ try {
+ const backendUrl = process.env.BACKEND_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "");
+ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+ throw new Error("Google OAuth credentials not configured");
+ }
+ const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+ method: "POST",
+ headers: { "Content-Type": "application/x-www-form-urlencoded" },
+ body: new URLSearchParams({
+ code,
+ client_id: process.env.GOOGLE_CLIENT_ID,
+ client_secret: process.env.GOOGLE_CLIENT_SECRET,
+ redirect_uri: `${backendUrl}/api/auth/google/callback`,
+ grant_type: "authorization_code",
+ }),
+ });
+ const tokenData = await tokenRes.json();
+ if (!tokenData.access_token) {
+ console.error("[Google OAuth] Token error:", tokenData);
+ throw new Error(tokenData.error_description || "No access token from Google");
+ }
 
     const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },

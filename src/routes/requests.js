@@ -127,6 +127,43 @@ router.post("/", requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── PATCH /api/requests/:id ────────────────────────────────────────────────
+// Edit own request (buyer can edit their own request)
+router.patch("/:id", requireAuth, async (req, res, next) => {
+ try {
+ const { title, description, budget, county, category, subcat } = req.body;
+ const { rows } = await query(`SELECT user_id, status FROM buyer_requests WHERE id = $1`, [req.params.id]);
+ if (!rows.length) return res.status(404).json({ error: "Request not found" });
+ if (rows[0].user_id !== req.user.id && req.user.role !== "admin") {
+ return res.status(403).json({ error: "Not your request" });
+ }
+ if (rows[0].status === 'deleted') return res.status(400).json({ error: "Cannot edit deleted request" });
+
+ // Build update fields
+ const updates = [];
+ const params = [];
+ let paramIdx = 1;
+
+ if (title !== undefined) { updates.push(`title = $${paramIdx++}`); params.push(title.trim()); }
+ if (description !== undefined) { updates.push(`description = $${paramIdx++}`); params.push(description.trim()); }
+ if (budget !== undefined) { updates.push(`budget = $${paramIdx++}`); params.push(budget ? parseFloat(budget) : null); }
+ if (county !== undefined) { updates.push(`county = $${paramIdx++}`); params.push(county || null); }
+ if (category !== undefined) { updates.push(`category = $${paramIdx++}`); params.push(category || null); }
+ if (subcat !== undefined) { updates.push(`subcat = $${paramIdx++}`); params.push(subcat || null); }
+
+ if (updates.length === 0) return res.status(400).json({ error: "No fields to update" });
+
+ updates.push(`updated_at = NOW()`);
+ params.push(req.params.id);
+
+ const { rows: updated } = await query(
+ `UPDATE buyer_requests SET ${updates.join(', ')} WHERE id = $${paramIdx} RETURNING *`,
+ params
+ );
+ res.json(updated[0]);
+ } catch (err) { next(err); }
+});
+
 // ── DELETE /api/requests/:id ───────────────────────────────────────────────
 // Delete own request (or admin can delete any)
 router.delete("/:id", requireAuth, async (req, res, next) => {
