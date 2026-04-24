@@ -1,7 +1,9 @@
 // src/routes/admin.js
 const express = require("express");
-const { query } = require("../db/pool");
+const { query, withTransaction } = require("../db/pool");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
+const { auditLog } = require("../services/audit.service");
+const { ConcurrencyError } = require("../services/concurrency.service");
 const router = express.Router();
 
 let _io = null;
@@ -84,6 +86,7 @@ router.post("/violations/:id/review", async (req, res, next) => {
     if (!rows.length) return res.status(404).json({ error: "Violation not found" });
     const v = rows[0];
     await query(`UPDATE chat_violations SET reviewed = TRUE WHERE id = $1`, [id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: `violation_${action}`, targetType: "user", targetId: v.user_id, details: { violation_id: id, listing_id: v.listing_id }, ip: req.ip });
     const MAX_WARNINGS = 5;
     if (action === "suspend") {
       await query(`UPDATE users SET is_suspended = TRUE WHERE id = $1`, [v.user_id]);
@@ -144,18 +147,41 @@ router.get("/escrows", async (req, res, next) => {
 });
 
 // ── POST /api/admin/escrows/:id/release ──────────────────────────────────────
+// Uses optimistic locking with transaction to prevent race conditions
 router.post("/escrows/:id/release", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { notes } = req.body;
+    const { notes, version } = req.body;
     const { rows } = await query(`SELECT * FROM escrows WHERE id = $1 AND status IN ('holding', 'disputed')`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Escrow not found or already resolved" });
     const escrow = rows[0];
-    await query(`UPDATE escrows SET status = 'released', released_at = NOW(), released_by = $1, notes = $2 WHERE id = $3`, [req.user.id, notes || "Admin force release", id]);
-    await query(`UPDATE listings SET status = 'sold' WHERE id = $1`, [escrow.listing_id]);
-    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'escrow_released', ' Funds Released', 'An admin has released your escrow funds. They should reflect in your M-Pesa shortly.')`, [escrow.seller_id]);
+
+    if (version !== undefined && version !== escrow.version) {
+      return res.status(409).json({
+        error: "Escrow was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: escrow.version
+      });
+    }
+
+    await withTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE escrows SET status = 'released', released_at = NOW(), released_by = $1, notes = $2, version = version + 1 WHERE id = $3 AND version = $4 RETURNING *`,
+        [req.user.id, notes || "Admin force release", id, escrow.version]
+      );
+      if (!result.rowCount) {
+        throw new ConcurrencyError("Escrow was modified by another request. Please refresh.", "OPTIMISTIC_LOCK_FAILED");
+      }
+      await client.query(`UPDATE listings SET status = 'sold', version = version + 1 WHERE id = $1`, [escrow.listing_id]);
+      await client.query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'escrow_released', ' Funds Released', 'An admin has released your escrow funds. They should reflect in your M-Pesa shortly.')`, [escrow.seller_id]);
+    });
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "escrow_release", targetType: "escrow", targetId: id, details: { listing_id: escrow.listing_id, seller_id: escrow.seller_id, notes }, ip: req.ip });
     res.json({ message: "Escrow released successfully" });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── GET /api/admin/disputes ───────────────────────────────────────────────────
@@ -173,22 +199,45 @@ router.get("/disputes", async (req, res, next) => {
 });
 
 // ── POST /api/admin/disputes/:id/resolve ─────────────────────────────────────
+// Uses optimistic locking with transaction to prevent race conditions
 router.post("/disputes/:id/resolve", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { resolution, release_to } = req.body;
+    const { resolution, release_to, version } = req.body;
     const { rows } = await query(`SELECT * FROM disputes WHERE id = $1 AND status = 'open'`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Dispute not found or already resolved" });
     const dispute = rows[0];
     const { rows: escrowRows } = await query(`SELECT * FROM escrows WHERE id = $1`, [dispute.escrow_id]);
     const escrow = escrowRows[0];
-    await query(`UPDATE disputes SET status = 'resolved', resolved_by = $1, resolution = $2 WHERE id = $3`, [req.user.id, resolution, id]);
-    const escrowStatus = release_to === "seller" ? "released" : "refunded";
-    await query(`UPDATE escrows SET status = $1, released_at = NOW(), released_by = $2 WHERE id = $3`, [escrowStatus, req.user.id, dispute.escrow_id]);
-    const notifyUserId = release_to === "seller" ? escrow.seller_id : escrow.buyer_id;
-    await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'dispute_resolved', 'Dispute Resolved', $2)`, [notifyUserId, `Your dispute has been resolved in your favour. Resolution: ${resolution}`]);
+
+    if (version !== undefined && version !== escrow.version) {
+      return res.status(409).json({
+        error: "Escrow was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: escrow.version
+      });
+    }
+
+    await withTransaction(async (client) => {
+      const escrowStatus = release_to === "seller" ? "released" : "refunded";
+      const result = await client.query(
+        `UPDATE escrows SET status = $1, released_at = NOW(), released_by = $2, version = version + 1 WHERE id = $3 AND version = $4 RETURNING *`,
+        [escrowStatus, req.user.id, dispute.escrow_id, escrow.version]
+      );
+      if (!result.rowCount) {
+        throw new ConcurrencyError("Escrow was modified by another request. Please refresh.", "OPTIMISTIC_LOCK_FAILED");
+      }
+      await client.query(`UPDATE disputes SET status = 'resolved', resolved_by = $1, resolution = $2 WHERE id = $3`, [req.user.id, resolution, id]);
+      const notifyUserId = release_to === "seller" ? escrow.seller_id : escrow.buyer_id;
+      await client.query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'dispute_resolved', 'Dispute Resolved', $2)`, [notifyUserId, `Your dispute has been resolved in your favour. Resolution: ${resolution}`]);
+    });
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "dispute_resolve", targetType: "dispute", targetId: id, details: { resolution, release_to, escrow_id: dispute.escrow_id }, ip: req.ip });
     res.json({ message: "Dispute resolved" });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── GET /api/admin/users ──────────────────────────────────────────────────────
@@ -209,13 +258,36 @@ router.get("/users", async (req, res, next) => {
 });
 
 // ── POST /api/admin/users/:id/suspend ────────────────────────────────────────
+// Uses optimistic locking to prevent race conditions
 router.post("/users/:id/suspend", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { suspend } = req.body;
-    await query(`UPDATE users SET is_suspended = $1 WHERE id = $2`, [!!suspend, id]);
+    const { suspend, version } = req.body;
+    const { rows } = await query(`SELECT version FROM users WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: "User not found" });
+
+    if (version !== undefined && version !== rows[0].version) {
+      return res.status(409).json({
+        error: "User was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: rows[0].version
+      });
+    }
+
+    const result = await query(`UPDATE users SET is_suspended = $1, version = version + 1 WHERE id = $2 AND version = $3 RETURNING *`, [!!suspend, id, rows[0].version]);
+    if (!result.rowCount) {
+      return res.status(409).json({
+        error: "User was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED"
+      });
+    }
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: suspend ? "user_suspend" : "user_unsuspend", targetType: "user", targetId: id, ip: req.ip });
     res.json({ message: `User ${suspend ? "suspended" : "unsuspended"}` });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── POST /api/admin/users/:id/warn ───────────────────────────────────────────
@@ -254,6 +326,7 @@ router.post("/users/:id/warn", async (req, res, next) => {
     await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)`, [user.id, notif.type, notif.title, notif.body]);
     pushNotification(user.id, notif);
     sendEmail(user.email, user.name, notif.title, notif.body).catch(() => {});
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "user_warn", targetType: "user", targetId: req.params.id, details: { reason, violation_count: user.violation_count, strikes_left: strikesLeft }, ip: req.ip });
     res.json({ message: `Warning issued (strike ${user.violation_count} of ${MAX_WARNINGS})`, violation_count: user.violation_count, strikes_left: strikesLeft });
   } catch (err) { next(err); }
 });
@@ -263,7 +336,7 @@ router.get("/payments", async (req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT p.*, u.name AS payer_name, u.email AS payer_email, l.title AS listing_title
-       FROM payments p JOIN users u ON u.id = p.payer_id JOIN listings l ON l.id = p.listing_id
+       FROM payments p JOIN users u ON u.id = p.payer_id LEFT JOIN listings l ON l.id = p.listing_id
        ORDER BY p.created_at DESC LIMIT 200`
     );
     res.json(rows);
@@ -277,6 +350,7 @@ router.patch("/users/:id/role", async (req, res, next) => {
     if (!["buyer","seller","admin"].includes(role)) return res.status(400).json({ error: "Invalid role" });
     const { rows } = await query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, email, role`, [role, req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "User not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "user_role_change", targetType: "user", targetId: req.params.id, details: { new_role: role }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -297,16 +371,21 @@ router.get("/users/:id/listings", async (req, res, next) => {
 
 // ── GET /api/admin/listings ───────────────────────────────────────────────────
 router.get("/listings", async (req, res, next) => {
-  try {
-    const { status, search, seller_id, page = 1, limit = 50 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const conditions = [];
-    const params = [];
-    if (status) { params.push(status); conditions.push(`l.status = $${params.length}`); }
-    if (search) { params.push(`%${search}%`); conditions.push(`(l.title ILIKE $${params.length} OR u.name ILIKE $${params.length})`); }
-    if (seller_id) { params.push(seller_id); conditions.push(`l.seller_id = $${params.length}`); }
-    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    params.push(parseInt(limit), offset);
+try {
+const { status, search, seller_id } = req.query;
+let { page = 1, limit = 50 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 200) limit = 50;
+const offset = (page - 1) * limit;
+const conditions = [];
+const params = [];
+if (status) { params.push(status); conditions.push(`l.status = $${params.length}`); }
+if (search) { params.push(`%${search}%`); conditions.push(`(l.title ILIKE $${params.length} OR u.name ILIKE $${params.length})`); }
+if (seller_id) { params.push(seller_id); conditions.push(`l.seller_id = $${params.length}`); }
+const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+params.push(limit, offset);
     const { rows } = await query(
       `SELECT l.*, u.name AS seller_name, u.email AS seller_email, u.phone AS seller_phone,
        (SELECT COUNT(*) FROM payments p WHERE p.listing_id = l.id AND p.status='confirmed') AS payment_count,
@@ -337,9 +416,21 @@ router.get("/listings/:id/detail", async (req, res, next) => {
 });
 
 // ── PATCH /api/admin/listings/:id ────────────────────────────────────────────
+// Uses optimistic locking to prevent lost updates
 router.patch("/listings/:id", async (req, res, next) => {
   try {
-    const { status, free_unlock, title, description, reason_for_sale, category, price, location, county } = req.body;
+    const { status, free_unlock, title, description, reason_for_sale, category, price, location, county, version } = req.body;
+    const { rows: existing } = await query(`SELECT version FROM listings WHERE id = $1`, [req.params.id]);
+    if (!existing.length) return res.status(404).json({ error: "Listing not found" });
+
+    if (version !== undefined && version !== existing[0].version) {
+      return res.status(409).json({
+        error: "Listing was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: existing[0].version
+      });
+    }
+
     const updates = [];
     const params = [];
     if (status) { params.push(status); updates.push(`status = $${params.length}`); }
@@ -352,18 +443,36 @@ router.patch("/listings/:id", async (req, res, next) => {
     if (location) { params.push(location); updates.push(`location = $${params.length}`); }
     if (county) { params.push(county); updates.push(`county = $${params.length}`); }
     if (!updates.length) return res.status(400).json({ error: "Nothing to update" });
+
+    updates.push("version = version + 1");
     params.push(req.params.id);
-    const { rows } = await query(`UPDATE listings SET ${updates.join(", ")}, updated_at=NOW() WHERE id=$${params.length} RETURNING *`, params);
-    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
-    const changed = Object.keys(req.body).filter(k => k !== "free_unlock").join(", ");
+    params.push(existing[0].version);
+
+    const { rows } = await query(`UPDATE listings SET ${updates.join(", ")}, updated_at=NOW() WHERE id=$${params.length - 1} AND version = $${params.length} RETURNING *`, params);
+    if (!rows.length) {
+      return res.status(409).json({
+        error: "Listing was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED"
+      });
+    }
+
+    const changed = Object.keys(req.body).filter(k => k !== "free_unlock" && k !== "version").join(", ");
     if (changed) {
       await query(
         `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'admin_edit', 'Your listing was edited by admin', $2, $3)`,
         [rows[0].seller_id, `An admin edited your listing "${rows[0].title}". Fields changed: ${changed}. If you have questions, contact support@wekasoko.co.ke`, JSON.stringify({ listing_id: req.params.id, changed_fields: Object.keys(req.body) })]
       ).catch(() => {});
     }
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_edit", targetType: "listing", targetId: req.params.id, details: { changed_fields: Object.keys(req.body), title: rows[0].title }, ip: req.ip });
+    if(status&&["sold","flagged","rejected","archived","deleted"].includes(status)){
+      const ioInst=req.app?.get("io");
+      if(ioInst)ioInst.emit("listing_removed",{id:req.params.id});
+    }
     res.json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── DELETE /api/admin/listings/:id ───────────────────────────────────────────
@@ -379,19 +488,45 @@ router.delete("/listings/:id", async (req, res, next) => {
     await query(`DELETE FROM notifications WHERE data::text LIKE $1`, [`%${id}%`]).catch(()=>{});
     await query(`DELETE FROM reviews WHERE listing_id=$1`, [id]).catch(()=>{});
     await query(`DELETE FROM listings WHERE id=$1`, [id]);
+    const io=req.app?.get("io");
+    if(io)io.emit("listing_removed",{id});
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_delete", targetType: "listing", targetId: id, ip: req.ip });
     res.json({ message: "Listing permanently deleted" });
   } catch (err) { console.error("[Admin delete listing]", err.message); next(err); }
 });
 
 // ── POST /api/admin/listings/:id/free-unlock ─────────────────────────────────
+// Uses optimistic locking to prevent race conditions
 router.post("/listings/:id/free-unlock", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`, [id]);
-    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    const { version } = req.body;
+    const { rows: existing } = await query(`SELECT version FROM listings WHERE id = $1`, [id]);
+    if (!existing.length) return res.status(404).json({ error: "Listing not found" });
+
+    if (version !== undefined && version !== existing[0].version) {
+      return res.status(409).json({
+        error: "Listing was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: existing[0].version
+      });
+    }
+
+    const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW(), version = version + 1 WHERE id = $1 AND version = $2 RETURNING *`, [id, existing[0].version]);
+    if (!rows.length) {
+      return res.status(409).json({
+        error: "Listing was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED"
+      });
+    }
+
     await query(`INSERT INTO notifications (user_id, type, title, body) VALUES ($1, 'admin_unlock', 'Admin Unlocked', 'An admin has unlocked this listing for free. You can now see the buyer contact details.')`, [rows[0].seller_id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_free_unlock", targetType: "listing", targetId: id, details: { title: rows[0].title }, ip: req.ip });
     res.json({ message: "Listing unlocked for free", listing: rows[0] });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── POST /api/admin/listings/:id/restore ─────────────────────────────────────
@@ -402,6 +537,7 @@ router.post("/listings/:id/restore", async (req, res, next) => {
       [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_restore", targetType: "listing", targetId: req.params.id, details: { title: rows[0].title }, ip: req.ip });
     res.json({ ok: true, listing: rows[0] });
   } catch (err) { next(err); }
 });
@@ -411,6 +547,7 @@ router.post("/listings/:id/unlock", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE listings SET is_unlocked = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_unlock", targetType: "listing", targetId: req.params.id, details: { title: rows[0].title }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
@@ -421,21 +558,73 @@ router.post("/users/:id/free-unlock", async (req, res) => {
 });
 
 // ── POST /api/admin/escrows/:id/approve ──────────────────────────────────────
+// Uses optimistic locking to prevent race conditions
 router.post("/escrows/:id/approve", async (req, res, next) => {
   try {
-    const { rows } = await query(`UPDATE escrows SET admin_approved=TRUE, approved_by=$1, approved_at=NOW() WHERE id=$2 RETURNING *`, [req.user.id, req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
+    const { version } = req.body;
+    const { rows: existing } = await query(`SELECT version FROM escrows WHERE id = $1`, [req.params.id]);
+    if (!existing.length) return res.status(404).json({ error: "Escrow not found" });
+
+    if (version !== undefined && version !== existing[0].version) {
+      return res.status(409).json({
+        error: "Escrow was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: existing[0].version
+      });
+    }
+
+    const { rows } = await query(
+      `UPDATE escrows SET admin_approved=TRUE, approved_by=$1, approved_at=NOW(), version=version+1 WHERE id=$2 AND version=$3 RETURNING *`,
+      [req.user.id, req.params.id, existing[0].version]
+    );
+    if (!rows.length) {
+      return res.status(409).json({
+        error: "Escrow was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED"
+      });
+    }
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "escrow_approve", targetType: "escrow", targetId: req.params.id, ip: req.ip });
     res.json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── POST /api/admin/escrows/:id/refund ───────────────────────────────────────
+// Uses optimistic locking to prevent race conditions
 router.post("/escrows/:id/refund", async (req, res, next) => {
   try {
-    const { rows } = await query(`UPDATE escrows SET status='refunded', released_at=NOW(), released_by=$1, notes='Admin refund' WHERE id=$2 RETURNING *`, [req.user.id, req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
+    const { version } = req.body;
+    const { rows: existing } = await query(`SELECT version FROM escrows WHERE id = $1`, [req.params.id]);
+    if (!existing.length) return res.status(404).json({ error: "Escrow not found" });
+
+    if (version !== undefined && version !== existing[0].version) {
+      return res.status(409).json({
+        error: "Escrow was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED",
+        currentVersion: existing[0].version
+      });
+    }
+
+    const { rows } = await query(
+      `UPDATE escrows SET status='refunded', released_at=NOW(), released_by=$1, notes='Admin refund', version=version+1 WHERE id=$2 AND version=$3 RETURNING *`,
+      [req.user.id, req.params.id, existing[0].version]
+    );
+    if (!rows.length) {
+      return res.status(409).json({
+        error: "Escrow was modified by another request. Please refresh and try again.",
+        code: "OPTIMISTIC_LOCK_FAILED"
+      });
+    }
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "escrow_refund", targetType: "escrow", targetId: req.params.id, ip: req.ip });
     res.json(rows[0]);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
+    next(err);
+  }
 });
 
 // ── GET /api/admin/vouchers ───────────────────────────────────────────────────
@@ -455,6 +644,7 @@ router.post("/vouchers", async (req, res, next) => {
       `INSERT INTO vouchers (code, type, discount_percent, description, max_uses, expires_at, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [finalCode, type || "unlock", discount_percent || 100, description, max_uses || 50, expires_at || null, req.user.id]
     );
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "voucher_create", targetType: "voucher", targetId: rows[0].id, details: { code: finalCode, discount_percent: rows[0].discount_percent }, ip: req.ip });
     res.status(201).json(rows[0]);
   } catch (err) {
     if (err.code === "23505") return res.status(409).json({ error: "Code already exists" });
@@ -466,17 +656,23 @@ router.post("/vouchers", async (req, res, next) => {
 router.patch("/vouchers/:id/toggle", async (req, res, next) => {
   try {
     const { rows } = await query(`UPDATE vouchers SET active=NOT active WHERE id=$1 RETURNING *`, [req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: rows[0].active ? "voucher_enable" : "voucher_disable", targetType: "voucher", targetId: req.params.id, details: { code: rows[0].code }, ip: req.ip });
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
 
 // ── GET /api/admin/requests ───────────────────────────────────────────────────
 router.get("/requests", async (req, res, next) => {
-  try {
-    const { page=1, limit=50, status } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const conditions = status && status !== "all" ? [`r.status=$1`] : [];
-    const params = status && status !== "all" ? [status, parseInt(limit), offset] : [parseInt(limit), offset];
+try {
+const { status } = req.query;
+let { page=1, limit=50 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 200) limit = 50;
+const offset = (page - 1) * limit;
+const conditions = status && status !== "all" ? [`r.status=$1`] : [];
+const params = status && status !== "all" ? [status, limit, offset] : [limit, offset];
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     const limitIdx = params.length - 1;
     const offsetIdx = params.length;
@@ -511,11 +707,72 @@ router.get("/requests/:id/pitches", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── POST /api/admin/requests/:id/approve ─────────────────────────────────────
+router.post("/requests/:id/approve", async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `UPDATE buyer_requests SET status='active', approved_by=$1, approved_at=NOW(), updated_at=NOW()
+       WHERE id=$2 AND status='pending_review' RETURNING *`,
+      [req.user.id, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Request not found or already processed" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "request_approve", targetType: "buyer_request", targetId: req.params.id, details: { title: rows[0].title }, ip: req.ip });
+    const approved = rows[0];
+    res.json({ ok: true, request: approved });
+
+    // Async: notify matching sellers now that request is live
+    (async () => {
+      try {
+        const priceFilter = [];
+        const priceParams = [approved.user_id, approved.title];
+        if (approved.budget) { priceParams.push(parseFloat(approved.budget)); priceFilter.push(`l.price <= $${priceParams.length}`); }
+        if (approved.category) { priceParams.push(approved.category); priceFilter.push(`l.category ILIKE $${priceParams.length}`); }
+        const { rows: matches } = await query(
+          `SELECT DISTINCT l.seller_id, l.id AS listing_id
+           FROM listings l
+           WHERE l.status = 'active' AND l.seller_id != $1
+             AND (l.title ILIKE '%'||$2||'%' OR l.description ILIKE '%'||$2||'%' OR $2 ILIKE '%'||l.title||'%')
+             ${priceFilter.length ? 'AND ' + priceFilter.join(' AND ') : ''}
+           LIMIT 20`,
+          priceParams
+        );
+        const io = req.app?.get("io");
+        for (const m of matches) {
+          await query(
+            `INSERT INTO notifications (user_id,type,title,body,data)
+             VALUES ($1,'listing_match','A buyer wants what you have!',$2,$3)
+             ON CONFLICT DO NOTHING`,
+            [m.seller_id,
+             `A buyer is looking for "${approved.title}"${approved.budget ? ` — budget KSh ${parseFloat(approved.budget).toLocaleString()}` : ""}. You may have what they need!`,
+             JSON.stringify({ request_id: approved.id, listing_id: m.listing_id })]
+          ).catch(() => {});
+          if (io) io.to(`user:${m.seller_id}`).emit("notification", { type: "listing_match", title: "A buyer wants what you have!", body: `Someone is looking for "${approved.title}"`, data: { request_id: approved.id } });
+        }
+      } catch (e) { /* non-critical */ }
+    })();
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/requests/:id/reject ──────────────────────────────────────
+router.post("/requests/:id/reject", async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    const { rows } = await query(
+      `UPDATE buyer_requests SET status='rejected', rejection_reason=$1, updated_at=NOW()
+       WHERE id=$2 AND status='pending_review' RETURNING id,title,status`,
+      [reason || null, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Request not found or already processed" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "request_reject", targetType: "buyer_request", targetId: req.params.id, details: { title: rows[0].title, reason }, ip: req.ip });
+    res.json({ ok: true, request: rows[0] });
+  } catch (err) { next(err); }
+});
+
 // ── PATCH /api/admin/requests/:id/status ─────────────────────────────────────
 router.patch("/requests/:id/status", async (req, res, next) => {
   try {
     const { status } = req.body;
-    const validStatuses = ["active","closed","archived","expired"];
+    const validStatuses = ["active","closed","archived","expired","pending_review","rejected"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Invalid status" });
     const { rows } = await query(
       `UPDATE buyer_requests SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id,title,status`,
@@ -539,18 +796,22 @@ router.delete("/requests/:id", async (req, res, next) => {
 
 // ── GET /api/admin/sold ───────────────────────────────────────────────────────
 router.get("/sold", async (req, res, next) => {
-  try {
-    const { page=1, limit=30 } = req.query;
-    const offset = (parseInt(page)-1)*parseInt(limit);
-    const { rows } = await query(
-      `SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel,
-       l.created_at, COALESCE(l.sold_at, l.updated_at) AS sold_at,
-       u.name AS seller_name, u.email AS seller_email,
-       u2.name AS buyer_name, u2.email AS buyer_email,
-       COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
-       FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
-       WHERE l.status='sold' ORDER BY COALESCE(l.sold_at, l.updated_at) DESC LIMIT $1 OFFSET $2`, [parseInt(limit), offset]
-    );
+try {
+let { page=1, limit=30 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 200) limit = 30;
+const offset = (page - 1) * limit;
+const { rows } = await query(
+`SELECT l.id, l.title, l.category, l.price, l.status, l.sold_channel,
+l.created_at, COALESCE(l.sold_at, l.updated_at) AS sold_at,
+u.name AS seller_name, u.email AS seller_email,
+u2.name AS buyer_name, u2.email AS buyer_email,
+COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
+WHERE l.status='sold' ORDER BY COALESCE(l.sold_at, l.updated_at) DESC LIMIT $1 OFFSET $2`, [limit, offset]
+);
     const { rows: cnt } = await query(`SELECT COUNT(*) FROM listings WHERE status='sold'`);
     res.json({ listings: rows, total: parseInt(cnt[0].count) });
   } catch (err) { next(err); }
@@ -592,6 +853,7 @@ router.post("/listings/:id/mark-sold", async (req, res, next) => {
       body: `"${listing.title}" has been marked as sold ${channelLabel}.`,
     });
 
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_mark_sold", targetType: "listing", targetId: id, details: { title: listing.title, sold_channel }, ip: req.ip });
     res.json({ ok: true, message: `Listing marked as sold (${sold_channel})` });
   } catch (err) { next(err); }
 });
@@ -617,6 +879,7 @@ router.patch("/reports/:id", async (req, res, next) => {
     const { action } = req.body;
     if (!["resolve","dismiss"].includes(action)) return res.status(400).json({ error: "action must be resolve or dismiss" });
     await query(`UPDATE listing_reports SET status=$1, resolved_by=$2, resolved_at=NOW() WHERE id=$3`, [action === "resolve" ? "resolved" : "dismissed", req.user.id, req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: `report_${action}`, targetType: "report", targetId: req.params.id, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -639,6 +902,7 @@ router.get("/reviews", async (req, res, next) => {
 router.delete("/reviews/:id", async (req, res, next) => {
   try {
     await query(`DELETE FROM reviews WHERE id=$1`, [req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "review_delete", targetType: "review", targetId: req.params.id, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -652,7 +916,9 @@ router.delete("/users/:id", async (req, res, next) => {
     const { rows: target } = await query(`SELECT role FROM users WHERE id=$1`, [id]);
     if (!target.length) return res.status(404).json({ error: "User not found" });
     if (target[0].role === "admin") return res.status(403).json({ error: "Admin accounts cannot be deleted here. Use the Team Management section." });
+    const { rows: uInfo } = await query(`SELECT name, email FROM users WHERE id=$1`, [id]).catch(()=>({rows:[]}));
     await purgeUser(id);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "user_delete", targetType: "user", targetId: id, details: { name: uInfo[0]?.name, email: uInfo[0]?.email }, ip: req.ip });
     res.json({ message: "User and all data permanently deleted" });
   } catch (err) { console.error("[Admin delete user FATAL]", err.message); next(err); }
 });
@@ -762,6 +1028,7 @@ router.post("/invite", async (req, res, next) => {
     await sendEmail(email, name, "You have been invited to Weka Soko Admin",
       `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
     );
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level }, ip: req.ip });
     res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
   } catch (err) { console.error("[Admin invite]", err.message); next(err); }
 });
@@ -771,6 +1038,7 @@ router.patch("/admins/:id/level", async (req, res, next) => {
     const { admin_level } = req.body;
     if (!["viewer","moderator","manager","super"].includes(admin_level)) return res.status(400).json({ error: "Invalid level" });
     await query(`UPDATE users SET admin_level=$1 WHERE id=$2 AND role='admin'`, [admin_level, req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_level_change", targetType: "user", targetId: req.params.id, details: { new_level: admin_level }, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -778,6 +1046,7 @@ router.patch("/admins/:id/level", async (req, res, next) => {
 router.delete("/admins/:id", async (req, res, next) => {
   try {
     await query(`UPDATE users SET role='buyer', admin_level=NULL WHERE id=$1`, [req.params.id]);
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_revoke", targetType: "user", targetId: req.params.id, ip: req.ip });
     res.json({ ok: true, message: "Admin access revoked" });
   } catch (err) { next(err); }
 });
@@ -821,10 +1090,25 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
       [listing.seller_id, `Great news! Your listing "${listing.title}" has been approved and is now live on Weka Soko.`, JSON.stringify({ listing_id: id })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
+    if (io) {
+      // Notify the seller their ad is live
+      io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "🎉 Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
+      // Global feed refresh — sends the full listing object to all connected users
+      query(
+        `SELECT l.id, l.title, l.description, l.category, l.subcat, l.price, l.location, l.county,
+                l.seller_id, l.view_count, l.interest_count, l.created_at, l.expires_at,
+                l.listing_anon_tag AS seller_anon,
+                u.avg_rating AS seller_avg_rating, u.review_count AS seller_review_count,
+                COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+         FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1`, [id]
+      ).then(({ rows: lRows }) => {
+        if (lRows.length) io.emit("new_listing", lRows[0]);
+      }).catch(() => {});
+    }
     sendEmail(listing.email, listing.name, "Your ad is live on Weka Soko!",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" has been approved and is now live.\n\n${FRONTEND}\n\nGood luck with your sale!\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation approve email]", e.message));
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_approve", targetType: "listing", targetId: id, details: { title: listing.title }, ip: req.ip });
     res.json({ ok: true, message: "Listing approved and live" });
 
     // Async: notify buyers whose requests match this newly approved listing
@@ -880,10 +1164,14 @@ router.post("/moderation/:id/reject", async (req, res, next) => {
       [listing.seller_id, `Your listing "${listing.title}" was not approved. Reason: ${reason.trim()}`, JSON.stringify({ listing_id: id, reason: reason.trim() })]
     ).catch(() => {});
     const io = req.app?.get("io");
-    if (io) io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_rejected", title: "Ad Not Approved", body: `"${listing.title}" — ${reason.trim().slice(0, 80)}`, data: { listing_id: id } });
+    if (io) {
+      io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_rejected", title: "Ad Not Approved", body: `"${listing.title}" — ${reason.trim().slice(0, 80)}`, data: { listing_id: id } });
+      io.emit("listing_removed", { id });
+    }
     sendEmail(listing.email, listing.name, "Your Weka Soko ad was not approved",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" was not approved.\n\nReason: ${reason.trim()}\n\nYou can edit and resubmit at:\n${FRONTEND}\n\nQuestions? Contact support@wekasoko.co.ke\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation reject email]", e.message));
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_reject", targetType: "listing", targetId: id, details: { title: listing.title, reason: reason.trim() }, ip: req.ip });
     res.json({ ok: true, message: "Listing rejected, seller notified" });
   } catch (err) { next(err); }
 });
@@ -908,6 +1196,7 @@ router.post("/moderation/:id/request-changes", async (req, res, next) => {
     sendEmail(listing.email, listing.name, "Changes needed on your Weka Soko ad",
       `Hi ${listing.name},\n\nYour listing "${listing.title}" needs changes before going live.\n\nNote: ${note.trim()}\n\nEdit it at:\n${FRONTEND}\n\nOnce updated it will be re-reviewed automatically.\n\n— Weka Soko`
     ).catch(e => console.error("[Moderation changes email]", e.message));
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "listing_request_changes", targetType: "listing", targetId: id, details: { title: listing.title, note: note.trim() }, ip: req.ip });
     res.json({ ok: true, message: "Change request sent to seller" });
   } catch (err) { next(err); }
 });
@@ -1051,7 +1340,6 @@ router.post("/seed-test-data", requireAuth, requireAdmin, async (req, res, next)
 });
 
 // ── RISK 10: ADMIN AUDIT LOG ──────────────────────────────────────────────────
-const { auditLog } = require("../services/audit.service");
 
 router.get("/audit-log", requireAuth, requireAdmin, async (req, res, next) => {
   try {
@@ -1133,6 +1421,52 @@ router.post("/broadcast", requireAuth, requireAdmin, async (req, res, next) => {
     if (io) io.emit("notification", { type, title, body, data: { broadcast: true } });
     await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "emergency_broadcast", details: { title, body, recipients: count }, ip: req.ip });
     res.json({ ok: true, sent_to: count });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/admin/listings/:id/discount ──────────────────────────────────────
+// Grant a flat KSh discount on the unlock fee for a specific listing.
+// discount_amount = 0-250 (250 = free unlock). Seller is notified immediately.
+router.post("/listings/:id/discount", requireAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const discount = parseInt(req.body.discount_amount);
+    const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "250");
+    if (isNaN(discount) || discount < 0 || discount > UNLOCK_FEE)
+      return res.status(400).json({ error: `discount_amount must be between 0 and ${UNLOCK_FEE}` });
+
+    const { rows } = await query(
+      `SELECT l.id, l.title, l.seller_id, u.name AS seller_name, u.email AS seller_email
+       FROM listings l JOIN users u ON u.id = l.seller_id
+       WHERE l.id = $1 AND l.status != 'deleted'`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Listing not found" });
+    const listing = rows[0];
+
+    await query(`UPDATE listings SET unlock_discount = $1 WHERE id = $2`, [discount, id]);
+
+    const finalFee = Math.max(0, UNLOCK_FEE - discount);
+    const notifTitle = discount >= UNLOCK_FEE
+      ? "Free unlock granted for your listing!"
+      : `Discount applied — only KSh ${finalFee} to unlock your listing`;
+    const notifBody = discount >= UNLOCK_FEE
+      ? `Good news! The admin has granted a FREE unlock for "${listing.title}". You can now reveal your buyer's contact at no cost.`
+      : `The admin has applied a KSh ${discount} discount on the unlock fee for "${listing.title}". You only need to pay KSh ${finalFee} (was KSh ${UNLOCK_FEE}) to reveal your buyer's contact.`;
+
+    await query(
+      `INSERT INTO notifications (user_id, type, title, body, data)
+       VALUES ($1, 'unlock_discount', $2, $3, $4)`,
+      [listing.seller_id, notifTitle, notifBody, JSON.stringify({ listing_id: id, discount, final_fee: finalFee })]
+    ).catch(() => {});
+    pushNotification(listing.seller_id, { type: "unlock_discount", title: notifTitle, body: notifBody });
+
+    const { sendEmail } = require("../services/email.service");
+    sendEmail(listing.seller_email, listing.seller_name, notifTitle, notifBody).catch(() => {});
+
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "unlock_discount", targetType: "listing", targetId: id, details: { discount, final_fee: finalFee, title: listing.title }, ip: req.ip });
+
+    res.json({ ok: true, listing_id: id, discount, final_fee: finalFee });
   } catch (err) { next(err); }
 });
 

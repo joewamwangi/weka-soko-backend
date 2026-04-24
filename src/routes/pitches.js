@@ -127,14 +127,11 @@ router.post("/:id/accept", requireAuth, async (req, res, next) => {
     // Initiate M-Pesa STK Push
     const { initiateSTKPush } = require("../services/mpesa.service");
     const { rows: payRow } = await query(
-      `INSERT INTO payments (payer_id,type,amount_kes,mpesa_phone,status) VALUES ($1,'pitch_reveal',$2,$3,'pending') RETURNING id`,
-      [req.user.id, finalAmount, phone]
+      `INSERT INTO payments (payer_id,type,amount_kes,mpesa_phone,status,pitch_id) VALUES ($1,'pitch_reveal',$2,$3,'pending',$4) RETURNING id`,
+      [req.user.id, finalAmount, phone, id]
     );
     const paymentId = payRow[0].id;
     if (voucherRow) await query(`UPDATE vouchers SET uses=uses+1 WHERE id=$1`, [voucherRow.id]);
-
-    // Store pitch_id in payment so callback can handle it
-    await query(`UPDATE payments SET mpesa_receipt='PITCH-PENDING-' || $1 WHERE id=$2`, [id, paymentId]);
 
     const result = await initiateSTKPush({
       phone, amount: finalAmount,
@@ -188,7 +185,10 @@ router.get("/for-request/:requestId", requireAuth, async (req, res, next) => {
     if (reqRows[0].user_id !== req.user.id) return res.status(403).json({ error: "Not your request" });
     const { rows } = await query(
       `SELECT p.id, p.message, p.offered_price, p.status, p.created_at,
-              u.anon_tag AS seller_anon
+              u.anon_tag AS seller_anon,
+              CASE WHEN p.status='accepted' THEN u.name ELSE NULL END AS seller_name,
+              CASE WHEN p.status='accepted' THEN u.phone ELSE NULL END AS seller_phone,
+              CASE WHEN p.status='accepted' THEN u.email ELSE NULL END AS seller_email
        FROM seller_pitches p JOIN users u ON u.id=p.seller_id
        WHERE p.request_id=$1 AND p.status!='withdrawn' ORDER BY p.created_at DESC`,
       [req.params.requestId]

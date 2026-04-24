@@ -6,8 +6,8 @@ const crypto = require("crypto");
 const { body, validationResult } = require("express-validator");
 const { query, withTransaction } = require("../db/pool");
 const { requireAuth } = require("../middleware/auth");
-// notification.service skipped — WhatsApp not configured
 const { sendEmail } = require("../services/email.service");
+const { recordFailedAttempt, clearFailedAttempts } = require("../middleware/security");
 
 const router = express.Router();
 
@@ -46,19 +46,33 @@ async function sendVerificationEmail(userId, email, name) {
 
 // ── POST /api/auth/register ─────────────────────────────────────────────────
 router.post(
-  "/register",
-  [
-    body("name").trim().notEmpty().withMessage("Name is required"),
-    body("email").isEmail().normalizeEmail().withMessage("Valid email required"),
-    body("password").isLength({ min: 8 }).withMessage("Password must be at least 8 characters"),
-    body("role").isIn(["buyer","seller"]).withMessage("Role must be buyer or seller"),
-  ],
-  async (req, res, next) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+"/register",
+[
+body("name")
+.trim()
+.isLength({ min: 2, max: 100 })
+.withMessage("Name must be 2-100 characters")
+.matches(/^[a-zA-Z0-9\s'-]+$/)
+.withMessage("Name contains invalid characters"),
+body("email")
+.isEmail().normalizeEmail().withMessage("Valid email required"),
+body("password")
+.isLength({ min: 8, max: 128 })
+.withMessage("Password must be 8-128 characters")
+.matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+.withMessage("Password must contain uppercase, lowercase, and number"),
+body("role").isIn(["buyer","seller"]).withMessage("Role must be buyer or seller"),
+body("phone")
+.optional()
+.matches(/^(\+254|0)[1-9]\d{8}$/)
+.withMessage("Invalid Kenyan phone number"),
+],
+async (req, res, next) => {
+try {
+const errors = validationResult(req);
+if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const { name, email, password, role, phone } = req.body;
+const { name, email, password, role, phone } = req.body;
       // Check email uniqueness
       const existing = await query("SELECT id FROM users WHERE email=$1", [email]);
       if (existing.rows.length) return res.status(409).json({ error: "An account with this email already exists." });
@@ -180,69 +194,92 @@ router.post("/resend-verification", requireAuth, async (req, res, next) => {
 
 // ── POST /api/auth/login ────────────────────────────────────────────────────
 router.post(
-  "/login",
-  [body("email").isEmail().normalizeEmail(), body("password").notEmpty()],
-  async (req, res, next) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+"/login",
+[
+body("email").isEmail().normalizeEmail().withMessage("Valid email required"),
+body("password").isLength({ min: 1, max: 128 }).withMessage("Password required"),
+],
+async (req, res, next) => {
+try {
+const errors = validationResult(req);
+if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const { email, password } = req.body;
-      const { rows } = await query(
-        `SELECT id,name,email,password_hash,role,anon_tag,is_suspended,is_verified,account_status FROM users WHERE email=$1`,
-        [email]
-      );
-      if (!rows.length) return res.status(401).json({ error: "Invalid credentials" });
-      const user = rows[0];
-      if (user.account_status === "deleted") return res.status(401).json({ error: "Invalid credentials" });
-      // Admin accounts must use the admin panel — not the main site
-      if (user.role === "admin") return res.status(403).json({ error: "Admin accounts must sign in via the Weka Soko Admin panel." });
-      if (user.is_suspended) return res.status(403).json({ error: "Account suspended. Contact support@wekasoko.co.ke" });
+const { email, password } = req.body;
+const { rows } = await query(
+`SELECT id,name,email,password_hash,role,anon_tag,is_suspended,is_verified,account_status FROM users WHERE email=$1`,
+[email]
+);
+if (!rows.length) {
+recordFailedAttempt(req);
+return res.status(401).json({ error: "Invalid credentials" });
+}
+const user = rows[0];
+if (user.account_status === "deleted") {
+recordFailedAttempt(req);
+return res.status(401).json({ error: "Invalid credentials" });
+}
+if (user.role === "admin") return res.status(403).json({ error: "Admin accounts must sign in via the Weka Soko Admin panel." });
+if (user.is_suspended) return res.status(403).json({ error: "Account suspended. Contact support@wekasoko.co.ke" });
 
-      const valid = await bcrypt.compare(password, user.password_hash);
-      if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+const valid = await bcrypt.compare(password, user.password_hash);
+if (!valid) {
+recordFailedAttempt(req);
+return res.status(401).json({ error: "Invalid credentials" });
+}
 
-      delete user.password_hash;
-      delete user.account_status;
-      const token = signToken(user);
-      // Include needsVerification flag so the frontend can show a soft banner
-      res.json({ user, token, needsVerification: !user.is_verified });
-    } catch (err) { next(err); }
-  }
+clearFailedAttempts(req);
+delete user.password_hash;
+delete user.account_status;
+const token = signToken(user);
+res.json({ user, token, needsVerification: !user.is_verified });
+} catch (err) { next(err); }
+}
 );
 
 // ── POST /api/auth/admin-login ───────────────────────────────────────────────
 // Separate login endpoint exclusively for admin panel users.
 // Regular users (buyer/seller) are blocked here.
 router.post(
-  "/admin-login",
-  [body("email").isEmail().normalizeEmail(), body("password").notEmpty()],
-  async (req, res, next) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+"/admin-login",
+[
+body("email").isEmail().normalizeEmail().withMessage("Valid email required"),
+body("password").isLength({ min: 1, max: 128 }).withMessage("Password required"),
+],
+async (req, res, next) => {
+try {
+const errors = validationResult(req);
+if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const { email, password } = req.body;
-      const { rows } = await query(
-        `SELECT id,name,email,password_hash,role,admin_level,anon_tag,is_suspended,is_verified,account_status FROM users WHERE email=$1`,
-        [email]
-      );
-      if (!rows.length) return res.status(401).json({ error: "Invalid credentials" });
-      const user = rows[0];
-      if (user.account_status === "deleted") return res.status(401).json({ error: "Invalid credentials" });
-      // Only admin accounts allowed here
-      if (user.role !== "admin") return res.status(403).json({ error: "Access denied. This login is for admin accounts only." });
-      if (user.is_suspended) return res.status(403).json({ error: "Account suspended. Contact support@wekasoko.co.ke" });
+const { email, password } = req.body;
+const { rows } = await query(
+`SELECT id,name,email,password_hash,role,admin_level,anon_tag,is_suspended,is_verified,account_status FROM users WHERE email=$1`,
+[email]
+);
+if (!rows.length) {
+recordFailedAttempt(req);
+return res.status(401).json({ error: "Invalid credentials" });
+}
+const user = rows[0];
+if (user.account_status === "deleted") {
+recordFailedAttempt(req);
+return res.status(401).json({ error: "Invalid credentials" });
+}
+if (user.role !== "admin") return res.status(403).json({ error: "Access denied. This login is for admin accounts only." });
+if (user.is_suspended) return res.status(403).json({ error: "Account suspended. Contact support@wekasoko.co.ke" });
 
-      const valid = await bcrypt.compare(password, user.password_hash);
-      if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+const valid = await bcrypt.compare(password, user.password_hash);
+if (!valid) {
+recordFailedAttempt(req);
+return res.status(401).json({ error: "Invalid credentials" });
+}
 
-      delete user.password_hash;
-      delete user.account_status;
-      const token = signToken(user);
-      res.json({ user, token });
-    } catch (err) { next(err); }
-  }
+clearFailedAttempts(req);
+delete user.password_hash;
+delete user.account_status;
+const token = signToken(user);
+res.json({ user, token });
+} catch (err) { next(err); }
+}
 );
 
 // ── GET /api/auth/me ────────────────────────────────────────────────────────
@@ -250,7 +287,9 @@ router.get("/me", requireAuth, async (req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT id,name,email,role,admin_level,anon_tag,phone,avatar_url,is_verified,
-              response_rate,avg_response_hours,account_status,whatsapp_phone,created_at
+              response_rate,avg_response_hours,account_status,whatsapp_phone,created_at,
+              (google_id IS NOT NULL) AS is_google_user,
+              (password_hash IS NOT NULL AND password_hash NOT LIKE 'GOOGLE_%') AS has_native_password
        FROM users WHERE id=$1`,
       [req.user.id]
     );
@@ -288,10 +327,12 @@ router.patch("/profile", requireAuth, async (req, res, next) => {
 
 // ── POST /api/auth/change-password ──────────────────────────────────────────
 router.post("/change-password", requireAuth, async (req, res, next) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    if (!newPassword || newPassword.length < 8)
-      return res.status(400).json({ error: "New password must be at least 8 characters" });
+try {
+const { currentPassword, newPassword } = req.body;
+if (!newPassword || newPassword.length < 8 || newPassword.length > 128)
+return res.status(400).json({ error: "Password must be 8-128 characters" });
+if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(newPassword))
+return res.status(400).json({ error: "Password must contain uppercase, lowercase, and number" });
     const { rows } = await query(`SELECT password_hash FROM users WHERE id=$1`, [req.user.id]);
     if (!rows.length) return res.status(404).json({ error: "User not found" });
     if (rows[0].password_hash && !rows[0].password_hash.startsWith("GOOGLE_")) {
@@ -455,8 +496,11 @@ router.post("/forgot-password", async (req, res, next) => {
 router.post("/reset-password", async (req, res, next) => {
   try {
     const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ error: "Token and password required" });
-    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+if (!token || !password) return res.status(400).json({ error: "Token and password required" });
+if (password.length < 8 || password.length > 128)
+return res.status(400).json({ error: "Password must be 8-128 characters" });
+if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password))
+return res.status(400).json({ error: "Password must contain uppercase, lowercase, and number" });
 
     const { rows } = await query(
       `SELECT id,user_id,expires_at,used FROM password_resets WHERE token=$1`,

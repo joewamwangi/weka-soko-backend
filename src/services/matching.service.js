@@ -81,10 +81,10 @@ async function findMatchingListings(requestId) {
     const params = [];
 
     // Category match
-    if (request.category) {
-      params.push(request.category);
-      conditions.push(`l.category = $${params.length}`);
-    }
+if (request.category) {
+    params.push(request.category);
+    conditions.push(`l.category ILIKE $${params.length}`);
+  }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
