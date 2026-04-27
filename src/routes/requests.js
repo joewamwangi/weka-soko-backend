@@ -72,16 +72,26 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     const { rows } = await query(
       `INSERT INTO buyer_requests
-         (user_id, title, description, budget, county, category, subcat, keywords, min_price, max_price)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      (user_id, title, description, budget, county, category, subcat, keywords, min_price, max_price, status)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review') RETURNING *`,
       [req.user.id, title.trim(), description.trim(),
-       budget ? parseFloat(budget) : null, county || null,
-       category || null, subcat || null, keywords || null,
-       min_price ? parseFloat(min_price) : null,
-       max_price ? parseFloat(max_price) : null]
+      budget ? parseFloat(budget) : null, county || null,
+      category || null, subcat || null, keywords || null,
+      min_price ? parseFloat(min_price) : null,
+      max_price ? parseFloat(max_price) : null]
     );
     const request = rows[0];
-    res.status(201).json(request);
+    
+    // Notify admins of new request awaiting approval
+    await query(
+      `INSERT INTO notifications (user_id, type, title, body, data)
+       SELECT id, 'request_pending', 'New Buyer Request Pending Approval',
+       $1, $2 FROM users WHERE role = 'admin'`,
+      [`"${title.trim()}" — A new buyer request is awaiting your approval.`,
+       JSON.stringify({ request_id: request.id, title: title.trim() })]
+    ).catch(() => {});
+    
+    res.status(201).json({ ...request, message: "Request submitted for review. You'll be notified when it's approved." });
 
     // Async: find active sellers whose listings match this new request — notify them
     (async () => {

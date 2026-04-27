@@ -226,9 +226,10 @@ function detectListingContactInfo(text) {
 }
 
 function scanListingForContact(listing) {
+  // NOTE: description is intentionally NOT scanned - too many false positives
+  // Admin will manually review descriptions. Only scan title and other fields.
   const fields = {
     title: listing.title,
-    description: listing.description,
     reason_for_sale: listing.reason_for_sale,
     location: listing.location,
   };

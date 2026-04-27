@@ -530,13 +530,51 @@ router.get("/requests/:id/pitches", async (req, res, next) => {
 router.patch("/requests/:id/status", async (req, res, next) => {
   try {
     const { status } = req.body;
-    const validStatuses = ["active","closed","archived","expired"];
+    const validStatuses = ["active","closed","archived","expired","pending_review","rejected"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Invalid status" });
+    
+    // Get request details before update
+    const { rows: beforeRows } = await query(
+      `SELECT r.id, r.title, r.status, r.user_id, u.email, u.name
+       FROM buyer_requests r JOIN users u ON u.id=r.user_id WHERE r.id=$1`,
+      [req.params.id]
+    );
+    if (!beforeRows.length) return res.status(404).json({ error: "Request not found" });
+    const prevStatus = beforeRows[0].status;
+    
     const { rows } = await query(
       `UPDATE buyer_requests SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id,title,status`,
       [status, req.params.id]
     );
-    if (!rows.length) return res.status(404).json({ error: "Request not found" });
+    
+    // Notify user when request is approved (active) or rejected
+    if (prevStatus !== status) {
+      const request = beforeRows[0];
+      if (status === "active") {
+        // Approved - notify user
+        await query(
+          `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1,'request_approved','Request Approved',$2,$3)`,
+          [request.user_id, `Your buyer request "${request.title}" has been approved and is now live.`, JSON.stringify({ request_id: request.id })]
+        );
+        pushNotification(request.user_id, {
+          type: "request_approved",
+          title: "Request Approved",
+          body: `Your buyer request "${request.title}" is now live.`,
+        });
+      } else if (status === "rejected") {
+        // Rejected - notify user
+        await query(
+          `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1,'request_rejected','Request Not Approved',$2,$3)`,
+          [request.user_id, `Your buyer request "${request.title}" was not approved. Please review our guidelines.`, JSON.stringify({ request_id: request.id })]
+        );
+        pushNotification(request.user_id, {
+          type: "request_rejected",
+          title: "Request Not Approved",
+          body: `Your buyer request "${request.title}" was not approved.`,
+        });
+      }
+    }
+    
     res.json({ ok: true, request: rows[0] });
   } catch (err) { next(err); }
 });
