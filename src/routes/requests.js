@@ -62,12 +62,10 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!title || !description) return res.status(400).json({ error: "Title and description are required" });
     if (title.length > 120) return res.status(400).json({ error: "Title too long (max 120 chars)" });
 
-    // Contact info scan
-    for (const [field, val] of [["title", title], ["description", description]]) {
-      if (val) {
-        const r = detectContactInfo(val);
-        if (r.blocked) return res.status(422).json({ error: `"${field}" contains contact info (${r.reason}). Remove it to proceed.` });
-      }
+    // Contact info scan - only scan title, not description (too many false positives)
+    const titleScan = detectContactInfo(title);
+    if (titleScan.blocked) {
+      return res.status(422).json({ error: `"title" contains contact info (${titleScan.reason}). Remove it to proceed.` });
     }
 
     const { rows } = await query(
