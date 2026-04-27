@@ -181,6 +181,11 @@ router.get("/sold/all", async (req, res, next) => {
 // Admin only: Get all sold listings with seller and buyer info
 router.get("/admin/sold", requireAuth, async (req, res, next) => {
   try {
+    // Check if user is admin
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    
     const { q, page=1, limit=50 } = req.query;
     const offset = (parseInt(page)-1)*parseInt(limit);
     const params = [];
@@ -192,18 +197,18 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
     params.push(parseInt(limit), offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
-              l.view_count, l.interest_count, l.created_at,
-              COALESCE(l.sold_at, l.updated_at) AS sold_at,
-              l.sold_channel,
-              u.name AS seller_name, u.email AS seller_email,
-              u2.name AS buyer_name, u2.email AS buyer_email,
-              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
-       FROM listings l
-       JOIN users u ON u.id=l.seller_id
-       LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
-       ${where}
-       ORDER BY COALESCE(l.sold_at, l.updated_at) DESC
-       LIMIT $${params.length-1} OFFSET $${params.length}`,
+      l.view_count, l.interest_count, l.created_at,
+      COALESCE(l.sold_at, l.updated_at) AS sold_at,
+      l.sold_channel,
+      u.name AS seller_name, u.email AS seller_email,
+      u2.name AS buyer_name, u2.email AS buyer_email,
+      COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+      FROM listings l
+      JOIN users u ON u.id=l.seller_id
+      LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
+      ${where}
+      ORDER BY COALESCE(l.sold_at, l.updated_at) DESC
+      LIMIT $${params.length-1} OFFSET $${params.length}`,
       params
     );
     const { rows: cnt } = await query(
