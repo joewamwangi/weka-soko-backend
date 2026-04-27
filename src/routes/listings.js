@@ -190,10 +190,21 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
     const offset = (parseInt(page)-1)*parseInt(limit);
     const params = [];
     let where = "WHERE l.status='sold'";
+    
     if (q) {
       params.push(`%${q}%`);
-      where += ` AND (l.title ILIKE $1 OR u.name ILIKE $1 OR u.email ILIKE $1)`;
+      where += ` AND (l.title ILIKE $${params.length} OR u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`;
     }
+    
+    // Get total count
+    const { rows: cnt } = await query(
+      `SELECT COUNT(*) FROM listings l 
+       JOIN users u ON u.id=l.seller_id 
+       LEFT JOIN users u2 ON u2.id=l.locked_buyer_id ${where}`,
+      params
+    );
+    
+    // Get sold listings
     params.push(parseInt(limit), offset);
     const { rows } = await query(
       `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
@@ -202,7 +213,7 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
       l.sold_channel,
       u.name AS seller_name, u.email AS seller_email,
       u2.name AS buyer_name, u2.email AS buyer_email,
-      COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
+      COALESCE((SELECT json_agg(p.url) FROM (SELECT url FROM listing_photos WHERE listing_id=l.id ORDER BY sort_order LIMIT 1) p),'[]'::json) AS photos
       FROM listings l
       JOIN users u ON u.id=l.seller_id
       LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
@@ -211,10 +222,7 @@ router.get("/admin/sold", requireAuth, async (req, res, next) => {
       LIMIT $${params.length-1} OFFSET $${params.length}`,
       params
     );
-    const { rows: cnt } = await query(
-      `SELECT COUNT(*) FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id ${where}`,
-      params.slice(0,-2)
-    );
+    
     res.json({ listings: rows, total: parseInt(cnt[0].count) });
   } catch (err) { next(err); }
 });
