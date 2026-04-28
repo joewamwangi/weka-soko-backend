@@ -83,8 +83,11 @@ ALTER TABLE escrows
 
 -- ─── PAYMENT RECORDS — TILL REFERENCE ───────────────
 ALTER TABLE payments
-  ADD COLUMN IF NOT EXISTS till_number VARCHAR(20) DEFAULT '5673935',
-  ADD COLUMN IF NOT EXISTS voucher_code VARCHAR(30);
+ADD COLUMN IF NOT EXISTS till_number VARCHAR(20) DEFAULT '5673935',
+ADD COLUMN IF NOT EXISTS voucher_code VARCHAR(30);
+
+-- ─── FIX: Increase mpesa_receipt column size for Paystack references ───────────────
+ALTER TABLE payments ALTER COLUMN mpesa_receipt TYPE VARCHAR(100);
 
 -- ─── IMAGE SCANS ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS image_scans (

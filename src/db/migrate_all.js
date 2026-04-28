@@ -152,7 +152,7 @@ async function runMigration() {
       till_number VARCHAR(20) DEFAULT '5673935',
       purpose VARCHAR(60),
       status VARCHAR(30) DEFAULT 'pending',
-      mpesa_receipt VARCHAR(30),
+      mpesa_receipt VARCHAR(100),
       checkout_request_id VARCHAR(100),
       merchant_request_id VARCHAR(100),
       phone_used VARCHAR(20),
