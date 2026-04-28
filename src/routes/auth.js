@@ -436,17 +436,22 @@ router.post("/forgot-password", async (req, res, next) => {
     await query(`UPDATE password_resets SET used=TRUE WHERE user_id=$1 AND used=FALSE`, [user.id]);
     await query(`INSERT INTO password_resets (user_id,token,expires_at) VALUES ($1,$2,$3)`, [user.id, token, expiresAt]);
 
-    // Admin resets go to admin URL, regular users go to frontend
     const baseUrl = (admin && user.role === "admin") ? ADMIN_URL : FRONTEND;
     const resetLink = `${baseUrl}?reset_token=${token}`;
 
-    sendEmail(
-      user.email, user.name,
-      "Reset your Weka Soko password",
-      `Hi ${user.name},\n\nYou requested a password reset.\n\nSet a new password here (valid for 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email. Your password is unchanged.\n\n— Weka Soko`
-    ).catch(e => console.error("[Reset email]", e.message));
+    console.log(`[Auth] Sending reset email to ${user.email}, admin=${admin}, baseUrl=${baseUrl}`);
+    
+    try {
+      await sendEmail(
+        user.email, user.name,
+        "Reset your Weka Soko password",
+        `Hi ${user.name},\n\nYou requested a password reset.\n\nSet a new password here (valid for 1 hour):\n${resetLink}\n\nIf you didn't request this, ignore this email. Your password is unchanged.\n\n— Weka Soko`
+      );
+      console.log(`[Auth] Reset email sent successfully to ${user.email}`);
+    } catch (emailErr) {
+      console.error("[Auth] Failed to send reset email:", emailErr.message);
+    }
 
-    console.log(`[Auth] Password reset sent to ${user.email}`);
     res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
   } catch (err) { next(err); }
 });
