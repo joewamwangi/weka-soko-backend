@@ -1,10 +1,15 @@
 // src/services/paystack.service.js — Paystack payment integration for Starter accounts
-// Settles to M-Pesa Till number
+// Settles to M-Pesa Till number 5673935
+// Version: 1.0.0 — Migrated from M-Pesa Daraja 2026-04-28
 
 const axios = require('axios');
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
+
+if (!PAYSTACK_SECRET) {
+  console.error('⚠️ PAYSTACK_SECRET_KEY is not set!');
+}
 
 /**
  * Initialize a Paystack transaction
@@ -19,6 +24,8 @@ const PAYSTACK_BASE_URL = 'https://api.paystack.co';
  */
 async function initializeTransaction({ email, amount, phone, reference, description, metadata = {} }) {
   try {
+    console.log('[Paystack] Initializing transaction:', { email, amount, reference, description });
+    
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
       {
@@ -30,7 +37,7 @@ async function initializeTransaction({ email, amount, phone, reference, descript
         metadata: {
           ...metadata,
           custom_fields: [
-            { display_name: 'Phone Number', variable_name: 'phone', value: phone },
+            { display_name: 'Phone Number', variable_name: 'phone', value: phone || '' },
             { display_name: 'Description', variable_name: 'description', value: description }
           ]
         },
@@ -44,9 +51,10 @@ async function initializeTransaction({ email, amount, phone, reference, descript
       }
     );
 
+    console.log('[Paystack] Transaction initialized:', response.data.data.reference);
     return response.data.data;
   } catch (error) {
-    console.error('Paystack initialize error:', error.response?.data || error.message);
+    console.error('[Paystack] Initialize error:', error.response?.data || error.message);
     throw new Error(error.response?.data?.message || 'Failed to initialize payment');
   }
 }
@@ -58,6 +66,8 @@ async function initializeTransaction({ email, amount, phone, reference, descript
  */
 async function verifyTransaction(reference) {
   try {
+    console.log('[Paystack] Verifying transaction:', reference);
+    
     const response = await axios.get(
       `${PAYSTACK_BASE_URL}/transaction/verify/${reference}`,
       {
@@ -72,7 +82,7 @@ async function verifyTransaction(reference) {
       data: response.data.data
     };
   } catch (error) {
-    console.error('Paystack verify error:', error.response?.data || error.message);
+    console.error('[Paystack] Verify error:', error.response?.data || error.message);
     throw new Error(error.response?.data?.message || 'Failed to verify payment');
   }
 }
@@ -86,11 +96,11 @@ async function verifyTransaction(reference) {
 async function handleWebhook(body, signature) {
   // For production, you should verify the webhook signature
   // using your webhook secret. For now, we'll trust the payload.
-  
+
   const event = body.event;
   const data = body.data;
 
-  console.log('Paystack webhook received:', event, data.reference);
+  console.log('[Paystack] Webhook received:', event, data?.reference);
 
   return { event, data };
 }
@@ -120,7 +130,7 @@ async function createVirtualAccount(customerId, phone) {
 
     return response.data.data;
   } catch (error) {
-    console.error('Paystack virtual account error:', error.response?.data || error.message);
+    console.error('[Paystack] Virtual account error:', error.response?.data || error.message);
     throw new Error('Failed to create virtual account');
   }
 }
@@ -136,6 +146,8 @@ async function processRefund(transactionRef, amount) {
     const payload = { transaction: transactionRef };
     if (amount) payload.amount = amount * 100; // Convert to cents
 
+    console.log('[Paystack] Processing refund:', transactionRef, amount);
+
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/refund`,
       payload,
@@ -149,7 +161,7 @@ async function processRefund(transactionRef, amount) {
 
     return response.data.data;
   } catch (error) {
-    console.error('Paystack refund error:', error.response?.data || error.message);
+    console.error('[Paystack] Refund error:', error.response?.data || error.message);
     throw new Error('Failed to process refund');
   }
 }
