@@ -103,7 +103,7 @@ router.post("/escrow", requireAuth, async (req, res, next) => {
     if (existingEscrow.length) return res.status(409).json({ error: "An escrow is already active for this listing" });
     
     const feeAmount = Math.round(listing.price * ESCROW_FEE_PCT);
-    const totalAmount = listing.price + feeAmount;
+    const totalAmount = Math.round(listing.price + feeAmount);
     const releaseAfter = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
     // Generate unique reference
