@@ -30,7 +30,7 @@ async function initializeTransaction({ email, amount, phone, reference, descript
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
       {
         email,
-        amount: amount * 100, // Convert to cents/smallest currency unit
+        amount: Math.round(amount * 100), // Convert to cents/smallest currency unit
         currency: 'KES',
         reference,
         callback_url: process.env.PAYSTACK_CALLBACK_URL || `${process.env.FRONTEND_URL}/payment/callback`,
