@@ -2,9 +2,15 @@
 const FRONTEND = process.env.FRONTEND_URL || 'https://weka-soko-nextjs-q89r3s4q6.vercel.app';
 
 async function sendEmail(to, name, subject, text) {
-  if (!process.env.SENDGRID_API_KEY) return;
+  if (!process.env.SENDGRID_API_KEY) {
+    console.error("[Email] SENDGRID_API_KEY not set - email not sent");
+    return;
+  }
   const fromEmail = process.env.EMAIL_FROM;
-  if (!fromEmail) return;
+  if (!fromEmail) {
+    console.error("[Email] EMAIL_FROM not set - email not sent");
+    return;
+  }
   try {
     const html = `<!DOCTYPE html>
 <html lang="en">

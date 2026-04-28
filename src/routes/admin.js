@@ -818,9 +818,26 @@ router.post("/invite", async (req, res, next) => {
       userId = rows[0].id;
     }
     const { sendEmail } = require("../services/email.service");
-    await sendEmail(email, name, "You have been invited to Weka Soko Admin",
-      `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
-    );
+    
+    // Check email config before sending
+    if (!process.env.SENDGRID_API_KEY) {
+      console.error("[Admin Invite] SENDGRID_API_KEY not set - cannot send email");
+      return res.status(500).json({ error: "Email service not configured. Contact support." });
+    }
+    if (!process.env.EMAIL_FROM) {
+      console.error("[Admin Invite] EMAIL_FROM not set - cannot send email");
+      return res.status(500).json({ error: "Email service not configured. Contact support." });
+    }
+    
+    try {
+      await sendEmail(email, name, "You have been invited to Weka Soko Admin",
+        `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
+      );
+      console.log(`[Admin Invite] Email sent successfully to ${email}`);
+    } catch (emailErr) {
+      console.error("[Admin Invite] Failed to send email:", emailErr.message);
+      // Don't fail the whole request if email fails - user is still created
+    }
     await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level }, ip: req.ip });
     res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
   } catch (err) { console.error("[Admin invite]", err.message); next(err); }
