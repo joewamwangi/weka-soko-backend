@@ -252,6 +252,16 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
+    // ── PUSH TOKENS (for mobile app notifications) ────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS user_push_tokens (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      push_token VARCHAR(255) NOT NULL,
+      platform VARCHAR(10) CHECK (platform IN ('android', 'ios')),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_push_tokens_platform ON user_push_tokens(platform)`).catch(()=>{});
+
     // ── VOUCHERS ──────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS vouchers (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

@@ -212,5 +212,74 @@ function buildInfo(type, receiverPub, senderPub) {
   return Buffer.concat([typeBuffer, contextLen, r, receiverPub, s, senderPub]);
 }
 
+// ── POST /api/push/token (for mobile Expo push tokens) ─────────────────────────
+router.post("/token", requireAuth, async (req, res, next) => {
+  try {
+    const { token, platform } = req.body;
+    if (!token || !platform) {
+      return res.status(400).json({ error: "Token and platform required" });
+    }
+    if (!['android', 'ios'].includes(platform)) {
+      return res.status(400).json({ error: "Platform must be 'android' or 'ios'" });
+    }
+
+    await query(
+      `INSERT INTO user_push_tokens (user_id, push_token, platform, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+       push_token = $2, platform = $3, updated_at = NOW()`,
+      [req.user.id, token, platform]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ── DELETE /api/push/token (remove mobile push token) ────────────────────────
+router.delete("/token", requireAuth, async (req, res, next) => {
+  try {
+    await query(`DELETE FROM user_push_tokens WHERE user_id=$1`, [req.user.id]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ── sendMobilePushToUser — send to Expo push tokens ───────────────────────────
+async function sendMobilePushToUser(userId, payload) {
+  try {
+    const { rows } = await query(
+      `SELECT push_token, platform FROM user_push_tokens WHERE user_id=$1`,
+      [userId]
+    );
+    if (!rows.length) return;
+
+    const expoToken = process.env.EXPO_ACCESS_TOKEN;
+    if (!expoToken) {
+      console.warn("[Push] EXPO_ACCESS_TOKEN not set, skipping mobile push");
+      return;
+    }
+
+    const messages = rows.map(row => ({
+      to: row.push_token,
+      title: payload.title,
+      body: payload.body,
+      data: payload.data || {},
+      sound: 'default',
+      priority: 'high',
+    }));
+
+    // Send via Expo Push API
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${expoToken}`,
+      },
+      body: JSON.stringify(messages),
+    });
+  } catch (e) {
+    console.warn("[Push] sendMobilePushToUser error:", e.message);
+  }
+}
+
 module.exports = router;
 module.exports.sendPushToUser = sendPushToUser;
+module.exports.sendMobilePushToUser = sendMobilePushToUser;

@@ -23,6 +23,30 @@ const { uploadBuffer } = require("../services/cloudinary.service");
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024, files: 8 } });
 
+// ── GET /api/listings/categories ──────────────────────────────────────────────
+// Categories for mobile app
+router.get("/categories", (req, res) => {
+  const categories = [
+    { name: 'Electronics', icon: 'Smartphone', sub: ['Phones & Tablets', 'Laptops', 'TVs & Audio', 'Cameras', 'Gaming', 'Accessories'] },
+    { name: 'Vehicles', icon: 'Car', sub: ['Cars', 'Motorcycles', 'Trucks', 'Buses', 'Boats', 'Vehicle Parts'] },
+    { name: 'Property', icon: 'Home', sub: ['Houses for Sale', 'Land', 'Commercial', 'Short Stays'] },
+    { name: 'Fashion', icon: 'Shirt', sub: ["Men's Clothing", "Women's Clothing", 'Shoes', 'Bags', 'Watches', 'Jewellery'] },
+    { name: 'Furniture', icon: 'Sofa', sub: ['Sofas', 'Beds & Mattresses', 'Tables', 'Wardrobes', 'Office'] },
+    { name: 'Home & Garden', icon: 'Flower', sub: ['Kitchen Appliances', 'Home Decor', 'Garden', 'Cleaning', 'Lighting'] },
+    { name: 'Sports', icon: 'Activity', sub: ['Fitness', 'Bicycles', 'Outdoor Gear', 'Team Sports', 'Water Sports'] },
+    { name: 'Baby & Kids', icon: 'Baby', sub: ['Baby Gear', 'Toys', 'Kids Clothing', 'Kids Furniture', 'School'] },
+    { name: 'Books', icon: 'BookOpen', sub: ['Textbooks', 'Fiction', 'Non-Fiction', 'Courses', 'Instruments'] },
+    { name: 'Agriculture', icon: 'Wheat', sub: ['Livestock', 'Farm Equipment', 'Seeds', 'Produce', 'Irrigation'] },
+    { name: 'Services', icon: 'Wrench', sub: ['Home Services', 'Business', 'Tech', 'Transport', 'Events'] },
+    { name: 'Jobs', icon: 'Briefcase', sub: ['Full-time', 'Part-time', 'Freelance', 'Internship'] },
+    { name: 'Food', icon: 'Utensils', sub: ['Catering Equipment', 'Food Products', 'Restaurant Supplies'] },
+    { name: 'Health & Beauty', icon: 'HeartPulse', sub: ['Health', 'Beauty & Skincare', 'Gym', 'Medical'] },
+    { name: 'Pets', icon: 'Paw', sub: ['Dogs', 'Cats', 'Birds', 'Fish', 'Pet Supplies'] },
+    { name: 'Other', icon: 'Package', sub: ['Miscellaneous'] },
+  ];
+  res.json(categories);
+});
+
 // ── GET /api/listings/counties ────────────────────────────────────────────────
 router.get("/counties", (req, res) => res.json(KENYA_COUNTIES));
 
@@ -603,6 +627,50 @@ router.post("/:id/seed-photos", requireAuth, requireSeller, async (req, res, nex
       );
     }
     res.json({ ok: true, inserted: urls.length });
+  } catch (err) { next(err); }
+});
+
+// Helper function for Cloudinary resize
+function getResizedImageUrl(url, size = 'medium') {
+  if (!url) return null;
+  if (url.includes('cloudinary.com')) {
+    const sizes = {
+      thumb: 'w_400,h_400,c_fill,q_auto',
+      medium: 'w_800,h_600,c_fill,q_auto',
+      full: 'w_1200,q_auto'
+    };
+    return url.replace('/upload/', `/upload/${sizes[size]}/`);
+  }
+  return url;
+}
+
+// ── GET /api/listings/mobile-feed ────────────────────────────────────────────
+// Optimized for mobile: minimal data, smaller images, pagination
+router.get("/mobile-feed", async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
+    const { rows } = await query(
+      `SELECT l.id, l.title, l.price, l.location, l.county, l.category, l.status, l.created_at, l.interest_count,
+        CASE WHEN ARRAY_LENGTH(l.photos, 1) > 0 THEN l.photos[1] ELSE NULL END as thumbnail,
+        u.name as seller_name
+       FROM listings l
+       JOIN users u ON l.seller_id = u.id
+       WHERE l.status = 'active' AND l.expires_at > NOW()
+       ORDER BY l.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    // Add resized image URLs
+    const listings = rows.map(row => ({
+      ...row,
+      thumbnail: row.thumbnail ? getResizedImageUrl(row.thumbnail, 'thumb') : null
+    }));
+
+    res.json({ listings, page, hasMore: rows.length === limit });
   } catch (err) { next(err); }
 });
 
