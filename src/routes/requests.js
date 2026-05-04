@@ -12,11 +12,16 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // ── GET /api/requests ──────────────────────────────────────────────────────
 // List all active buyer requests (paginated)
 router.get("/", optionalAuth, async (req, res, next) => {
-  try {
-    const { page = 1, limit = 20, county, search, category, subcat, min_price, max_price, sort = 'newest' } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const params = [];
-    const conditions = ["r.status = 'active'"];
+try {
+const { county, search, category, subcat, min_price, max_price, sort = 'newest' } = req.query;
+let { page = 1, limit = 20 } = req.query;
+page = parseInt(page, 10);
+limit = parseInt(limit, 10);
+if (!page || isNaN(page) || page < 1) page = 1;
+if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 20;
+const offset = (page - 1) * limit;
+const params = [];
+const conditions = ["r.status = 'active'"];
 
     if (county) { params.push(county); conditions.push(`r.county ILIKE $${params.length}`); }
     if (search) { params.push(`%${search}%`); conditions.push(`(r.title ILIKE $${params.length} OR r.description ILIKE $${params.length})`); }
@@ -50,7 +55,7 @@ router.get("/", optionalAuth, async (req, res, next) => {
       params.slice(0, -2)
     );
 
-    res.json({ requests: rows, total: parseInt(cnt[0].count), page: parseInt(page) });
+    res.json({ requests: rows, total: parseInt(cnt[0].count), page });
   } catch (err) { next(err); }
 });
 
@@ -133,6 +138,43 @@ router.post("/", requireAuth, async (req, res, next) => {
       } catch (e) { /* non-critical */ }
     })();
   } catch (err) { next(err); }
+});
+
+// ── PATCH /api/requests/:id ────────────────────────────────────────────────
+// Edit own request (buyer can edit their own request)
+router.patch("/:id", requireAuth, async (req, res, next) => {
+ try {
+ const { title, description, budget, county, category, subcat } = req.body;
+ const { rows } = await query(`SELECT user_id, status FROM buyer_requests WHERE id = $1`, [req.params.id]);
+ if (!rows.length) return res.status(404).json({ error: "Request not found" });
+ if (rows[0].user_id !== req.user.id && req.user.role !== "admin") {
+ return res.status(403).json({ error: "Not your request" });
+ }
+ if (rows[0].status === 'deleted') return res.status(400).json({ error: "Cannot edit deleted request" });
+
+ // Build update fields
+ const updates = [];
+ const params = [];
+ let paramIdx = 1;
+
+ if (title !== undefined) { updates.push(`title = $${paramIdx++}`); params.push(title.trim()); }
+ if (description !== undefined) { updates.push(`description = $${paramIdx++}`); params.push(description.trim()); }
+ if (budget !== undefined) { updates.push(`budget = $${paramIdx++}`); params.push(budget ? parseFloat(budget) : null); }
+ if (county !== undefined) { updates.push(`county = $${paramIdx++}`); params.push(county || null); }
+ if (category !== undefined) { updates.push(`category = $${paramIdx++}`); params.push(category || null); }
+ if (subcat !== undefined) { updates.push(`subcat = $${paramIdx++}`); params.push(subcat || null); }
+
+ if (updates.length === 0) return res.status(400).json({ error: "No fields to update" });
+
+ updates.push(`updated_at = NOW()`);
+ params.push(req.params.id);
+
+ const { rows: updated } = await query(
+ `UPDATE buyer_requests SET ${updates.join(', ')} WHERE id = $${paramIdx} RETURNING *`,
+ params
+ );
+ res.json(updated[0]);
+ } catch (err) { next(err); }
 });
 
 // ── DELETE /api/requests/:id ───────────────────────────────────────────────

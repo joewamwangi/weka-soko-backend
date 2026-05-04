@@ -4,7 +4,7 @@ const { query } = require("../db/pool");
 const { runFollowUps } = require("./followup.service");
 const { sendEmail } = require("./email.service");
 
-const FRONTEND = process.env.FRONTEND_URL || "https://weka-soko.vercel.app";
+const FRONTEND = process.env.FRONTEND_URL || "https://weka-soko-nextjs.vercel.app";
 
 function startCronJobs() {
 

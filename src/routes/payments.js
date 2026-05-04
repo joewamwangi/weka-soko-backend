@@ -19,7 +19,8 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
     if (!listing_id) return res.status(400).json({ error: "listing_id is required" });
 
     const { rows: listingRows } = await query(
-      `SELECT * FROM listings WHERE id = $1 AND status != 'deleted'`, [listing_id]
+      `SELECT * FROM listings WHERE id = $1 AND status != 'deleted'`,
+      [listing_id]
     );
     if (!listingRows.length) return res.status(404).json({ error: "Listing not found" });
     const listing = listingRows[0];
@@ -38,7 +39,6 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
       if (vrows.length) { voucherRow = vrows[0]; discountPct = voucherRow.discount_percent || 0; }
     }
 
-    // Admin discount (flat KSh amount) applied before percentage voucher discount
     const adminDiscount = parseInt(listing.unlock_discount || 0);
     const baseAmount = Math.max(0, UNLOCK_FEE - adminDiscount);
     const finalAmount = Math.max(0, Math.round(baseAmount * (1 - discountPct / 100)));
@@ -89,6 +89,7 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
 });
 
 // ── POST /api/payments/escrow ──────────────────────────────────────────────────
+// Uses SELECT FOR UPDATE to prevent race conditions when creating escrow
 router.post("/escrow", requireAuth, async (req, res, next) => {
   try {
     const { listing_id, email } = req.body;
