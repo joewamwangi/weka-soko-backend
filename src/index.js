@@ -457,12 +457,8 @@ app.get("/health", async (req, res) => {
 });
 
 // ── Global Error Handler ───────────────────────────────────────────────────────
-app.use((err, req, res, next) => {
-  const status = err.status || err.statusCode || 500;
-  console.error(`[${status}] ${req.method} ${req.path} —`, err.message);
-  if (status === 500) console.error(err.stack);
-  res.status(status).json({ error: err.message || "Something went wrong" });
-});
+const { errorHandler } = require("./middleware/errorHandler");
+app.use(errorHandler);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
