@@ -1,4 +1,4 @@
-// src/routes/reviews.js — Weka Soko Reviews
+// src/routes/reviews.js - Weka Soko Reviews
 // Reviews are available after a listing is sold (status='sold') or escrow released.
 // Each party (buyer & seller) can leave exactly one review per transaction.
 const express = require("express");
@@ -8,13 +8,12 @@ const { ConcurrencyError } = require("../services/concurrency.service");
 
 const router = express.Router();
 
-// ── POST /api/reviews/:listingId ──────────────────────────────────────────────
+// POST /api/reviews/:listingId
 // Submit a review for a completed transaction
-// Uses transaction with row locking to prevent race conditions on upsert
 router.post("/:listingId", requireAuth, async (req, res, next) => {
   try {
     const { rating, comment } = req.body;
-    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Rating must be 1–5" });
+    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Rating must be 1-5" });
 
     const { rows } = await withTransaction(async (client) => {
       const { rows: ls } = await client.query(
@@ -42,25 +41,28 @@ router.post("/:listingId", requireAuth, async (req, res, next) => {
 
       const { rows: reviewRows } = await client.query(
         `INSERT INTO reviews (listing_id, reviewer_id, reviewee_id, reviewer_role, rating, comment, version)
-        VALUES ($1, $2, $3, $4, $5, $6, 1)
-        ON CONFLICT (listing_id, reviewer_id) DO UPDATE SET rating=$5, comment=$6, version=reviews.version+1, created_at=NOW()
-        RETURNING *`,
+         VALUES ($1, $2, $3, $4, $5, $6, 1)
+         ON CONFLICT (listing_id, reviewer_id) DO UPDATE SET rating=$5, comment=$6, version=reviews.version+1, created_at=NOW()
+         RETURNING *`,
         [req.params.listingId, req.user.id, revieweeId, reviewerRole, Math.round(rating), comment?.trim() || null]
       );
 
-// Notify the reviewee
-  const commentText = comment ? ` "${comment.slice(0, 80)}"` : "";
-  await query(
-    `INSERT INTO notifications (user_id, type, title, body, data)
-    VALUES ($1, 'new_review', 'You received a review', $2, $3)`,
-    [
-      revieweeId,
-      `You received a ${rating}-star review for "${listing.title || "your listing"}".${commentText}`,
-      JSON.stringify({ listing_id: req.params.listingId, rating })
-    ]
-  ).catch(() => {});
+      // Notify the reviewee - fixed template literal
+      const commentText = comment ? `"${comment.slice(0, 80)}"` : "";
+      const notificationBody = `You received a ${rating}-star review for "${listing.title || "your listing"}". ${commentText}`.trim();
+      
+      await query(
+        `INSERT INTO notifications (user_id, type, title, body, data)
+         VALUES ($1, 'new_review', 'You received a review', $2, $3)`,
+        [
+          revieweeId,
+          notificationBody,
+          JSON.stringify({ listing_id: req.params.listingId, rating })
+        ]
+      ).catch(() => {});
 
-    res.status(201).json({ ok: true, review: rows[0] });
+      res.status(201).json({ ok: true, review: rows[0] });
+    });
   } catch (err) {
     if (err.code === "NOT_FOUND") return res.status(404).json({ error: err.message, code: err.code });
     if (err.code === "FORBIDDEN") return res.status(403).json({ error: err.message, code: err.code });
@@ -69,7 +71,7 @@ router.post("/:listingId", requireAuth, async (req, res, next) => {
   }
 });
 
-// ── GET /api/reviews/user/:userId ─────────────────────────────────────────────
+// GET /api/reviews/user/:userId
 // Public: get all reviews for a user (as reviewee)
 router.get("/user/:userId", async (req, res, next) => {
   try {
@@ -89,8 +91,8 @@ router.get("/user/:userId", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── GET /api/reviews/listing/:listingId ───────────────────────────────────────
-// Get reviews for a specific listing (both buyer→seller and seller→buyer)
+// GET /api/reviews/listing/:listingId
+// Get reviews for a specific listing
 router.get("/listing/:listingId", requireAuth, async (req, res, next) => {
   try {
     const { rows } = await query(
@@ -98,13 +100,12 @@ router.get("/listing/:listingId", requireAuth, async (req, res, next) => {
        FROM reviews r WHERE r.listing_id=$1 ORDER BY r.created_at DESC`,
       [req.params.listingId]
     );
-    // Also tell the requester if they've already reviewed
     const myReview = rows.find(r => r.reviewer_id === req.user.id) || null;
     res.json({ reviews: rows, myReview });
   } catch (err) { next(err); }
 });
 
-// ── GET /api/reviews/me ───────────────────────────────────────────────────────
+// GET /api/reviews/me
 // Reviews written BY the logged-in user
 router.get("/me", requireAuth, async (req, res, next) => {
   try {
@@ -118,7 +119,7 @@ router.get("/me", requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── GET /api/reviews/pending ──────────────────────────────────────────────────
+// GET /api/reviews/pending
 // Listings where user was involved & can still leave a review
 router.get("/pending", requireAuth, async (req, res, next) => {
   try {
