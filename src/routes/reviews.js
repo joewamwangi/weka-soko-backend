@@ -48,16 +48,17 @@ router.post("/:listingId", requireAuth, async (req, res, next) => {
         [req.params.listingId, req.user.id, revieweeId, reviewerRole, Math.round(rating), comment?.trim() || null]
       );
 
-    // Notify the reviewee
-    await query(
-      `INSERT INTO notifications (user_id, type, title, body, data)
-       VALUES ($1, 'new_review', 'You received a review', $2, $3)`,
-      [
-        revieweeId,
-        `You received a ${rating}-star review for "${listing.title || "your listing"}".${comment ? ` "${comment.slice(0, 80)}"` : ""}`,
-        JSON.stringify({ listing_id: req.params.listingId, rating })
-      ]
-    ).catch(() => {});
+// Notify the reviewee
+  const commentText = comment ? ` "${comment.slice(0, 80)}"` : "";
+  await query(
+    `INSERT INTO notifications (user_id, type, title, body, data)
+    VALUES ($1, 'new_review', 'You received a review', $2, $3)`,
+    [
+      revieweeId,
+      `You received a ${rating}-star review for "${listing.title || "your listing"}".${commentText}`,
+      JSON.stringify({ listing_id: req.params.listingId, rating })
+    ]
+  ).catch(() => {});
 
     res.status(201).json({ ok: true, review: rows[0] });
   } catch (err) {
