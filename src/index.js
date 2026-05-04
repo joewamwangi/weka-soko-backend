@@ -273,10 +273,10 @@ io.on("connection", (socket) => {
           );
 
           const systemBody = severity === "suspended"
-            ? `ACCOUNT SUSPENDED: Your message was blocked and your account has been suspended for sharing contact information ("${violation.reason}"). You have received ${count} violation(s). Contact support@wekasoko.co.ke to appeal.`
-            : severity === "flagged"
-            ? `WARNING (${count}/3): Your message was blocked — it contained contact information ("${violation.reason}"). One more violation will result in account suspension. Contact info can only be shared after the KSh 250 unlock is paid.`
-            : `WARNING (${count}/3): Your message was blocked — it appeared to contain contact information ("${violation.reason}"). Contact info must stay hidden until the KSh 250 unlock is paid.`;
+      ? `ACCOUNT SUSPENDED: Your message was blocked and your account has been suspended for sharing contact information ("${violation.reason}"). You have received ${count} violation(s). Contact support@wekasoko.co.ke to appeal.`
+      : severity === "flagged"
+      ? `WARNING (${count}/3): Your message was blocked — it contained contact information ("${violation.reason}"). One more violation will result in account suspension. Contact info can only be shared after the KSh 260 unlock is paid.`
+      : `WARNING (${count}/3): Your message was blocked — it appeared to contain contact information ("${violation.reason}"). Contact info must stay hidden until the KSh 260 unlock is paid.`;
 
           await query(
             `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1, 'violation_warning', $2, $3, $4)`,

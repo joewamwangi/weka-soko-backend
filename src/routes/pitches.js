@@ -44,7 +44,7 @@ router.post("/", requireAuth, requireSeller, async (req, res, next) => {
        VALUES ($1,'seller_pitch','Someone has what you want!',$2,$3)`,
       [
         buyerRequest.user_id,
-        `${sellerAnon} says they have "${buyerRequest.title}"${price ? ` for KSh ${parseFloat(price).toLocaleString()}` : ""}. Pay KSh 250 to reveal their contact.`,
+        `${sellerAnon} says they have "${buyerRequest.title}"${price ? ` for KSh ${parseFloat(price).toLocaleString()}` : ""}. Pay KSh 260 to reveal their contact.`,
         JSON.stringify({ pitch_id: pitch[0].id, request_id, seller_anon: sellerAnon, message, offered_price: price || null })
       ]
     );
@@ -100,7 +100,7 @@ router.post("/:id/accept", requireAuth, async (req, res, next) => {
       if (vrows.length) { voucherRow = vrows[0]; discountPct = voucherRow.discount_percent || 0; }
     }
 
-    const PITCH_FEE = 250;
+    const PITCH_FEE = 260;
     const finalAmount = Math.max(0, Math.round(PITCH_FEE * (1 - discountPct / 100)));
 
     // Free via voucher

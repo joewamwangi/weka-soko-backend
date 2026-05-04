@@ -621,7 +621,7 @@ router.post("/:id/lock-in", requireAuth, async (req, res, next) => {
 
       await client.query(
         `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'buyer_locked_in','A buyer has locked in!',$2,$3)`,
-        [listing.seller_id, `A serious buyer locked in on "${listing.title}". Pay KSh 250 to reveal their contact.`, JSON.stringify({ listing_id: req.params.id })]
+        [listing.seller_id,       `A serious buyer locked in on "${listing.title}". Pay KSh 260 to reveal their contact.`, JSON.stringify({ listing_id: req.params.id })]
       );
 
       return listing;
@@ -632,7 +632,7 @@ router.post("/:id/lock-in", requireAuth, async (req, res, next) => {
       result.seller_email,
       result.seller_name,
       `A serious buyer wants your "${result.title}"`,
-      `Good news! A serious buyer just locked in on your listing "<strong>${result.title}</strong>".<br><br>Pay <strong>KSh 250</strong> to reveal their contact details and close the deal.<br><br><a href="https://weka-soko-nextjs.vercel.app/dashboard">Go to your dashboard →</a>`
+      `Good news! A serious buyer just locked in on your listing "<strong>${result.title}</strong>".<br><br>Pay <strong>KSh 260</strong> to reveal their contact details and close the deal.<br><br><a href="https://weka-soko-nextjs.vercel.app/dashboard">Go to your dashboard →</a>`
     ).catch(() => {});
 
     res.json({ message: "Locked in. Seller has been notified." });
