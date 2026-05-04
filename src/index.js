@@ -27,9 +27,18 @@ const pitchRoutes = require("./routes/pitches");
 const pushRoutes = require("./routes/push");
 const { sendPushToUser } = require("./routes/push");
 const { maintenanceMiddleware } = require("./middleware/maintenance");
+const { createUserRateLimiter, createPaymentLimiter } = require("./middleware/userRateLimiter");
+const { cacheMiddleware } = require("./services/cache.service");
+
+// Initialize Redis caching
+const { initRedis } = require("./services/cache.service");
+initRedis();
 
 const app = express();
 const server = http.createServer(app);
+
+// Apply user-based rate limiting globally
+app.use(createUserRateLimiter());
 
 // ── Socket.io Setup ───────────────────────────────────────────────────────────
 const io = new Server(server, {
@@ -445,6 +454,12 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/requests", requestRoutes);
 app.use("/api/pitches", pitchRoutes);
 app.use("/api/push", pushRoutes);
+
+// New routes for short-term fixes
+const moderationAppealRoutes = require("./routes/moderation-appeal");
+const refundRoutes = require("./routes/refunds");
+app.use("/api/moderation", moderationAppealRoutes);
+app.use("/api/refunds", refundRoutes);
 
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get("/health", async (req, res) => {
