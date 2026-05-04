@@ -2,6 +2,7 @@
 const express = require("express");
 const { query } = require("../db/pool");
 const { requireAuth, requireSeller } = require("../middleware/auth");
+const { initializeTransaction, verifyTransaction } = require("../services/paystack.service");
 const router = express.Router();
 
 // ── POST /api/pitches — Seller pitches to a buyer request ────────────────────
@@ -18,63 +19,51 @@ router.post("/", requireAuth, requireSeller, async (req, res, next) => {
       `SELECT * FROM buyer_requests WHERE id=$1 AND status='active'`, [request_id]
     );
     if (!reqRows.length) return res.status(404).json({ error: "Buyer request not found or no longer active" });
-    const buyerRequest = reqRows[0];
 
-    // Seller can't pitch on their own request
-    if (buyerRequest.user_id === req.user.id) return res.status(400).json({ error: "Cannot pitch on your own request" });
+    const buyerReq = reqRows[0];
+    if (buyerReq.user_id === req.user.id) return res.status(400).json({ error: "Cannot pitch to your own request" });
 
-    // Check for duplicate pitch from same seller
+    // Check seller hasn't already pitched on this request
     const { rows: existing } = await query(
-      `SELECT id FROM seller_pitches WHERE request_id=$1 AND seller_id=$2 AND status!='withdrawn'`,
+      `SELECT id FROM seller_pitches WHERE request_id=$1 AND seller_id=$2`,
       [request_id, req.user.id]
     );
     if (existing.length) return res.status(409).json({ error: "You have already pitched on this request" });
 
-    // Save the pitch
-    const { rows: pitch } = await query(
-      `INSERT INTO seller_pitches (request_id, seller_id, message, offered_price, status)
-       VALUES ($1,$2,$3,$4,'pending') RETURNING *`,
-      [request_id, req.user.id, message.trim(), price ? parseFloat(price) : null]
+    // Insert pitch
+    const { rows: pitchRows } = await query(
+      `INSERT INTO seller_pitches (request_id,seller_id,message,price) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [request_id, req.user.id, message.trim(), price || null]
     );
+    const pitch = pitchRows[0];
 
-    // Notify the buyer
-    const sellerAnon = req.user.anon_tag || "A seller";
+    // Notify buyer
     await query(
-      `INSERT INTO notifications (user_id,type,title,body,data)
-       VALUES ($1,'seller_pitch','Someone has what you want!',$2,$3)`,
-      [
-        buyerRequest.user_id,
-        `${sellerAnon} says they have "${buyerRequest.title}"${price ? ` for KSh ${parseFloat(price).toLocaleString()}` : ""}. Pay KSh 260 to reveal their contact.`,
-        JSON.stringify({ pitch_id: pitch[0].id, request_id, seller_anon: sellerAnon, message, offered_price: price || null })
-      ]
+      `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'new_pitch','New pitch on your request!',$2,$3)`,
+      [buyerReq.user_id, `${req.user.name} pitched on "${buyerReq.title}"`, JSON.stringify({ request_id, pitch_id: pitch.id })]
     );
 
-    // Real-time push to buyer
     const io = req.app?.get("io");
-    if (io) {
-      io.to(`user:${buyerRequest.user_id}`).emit("notification", {
-        type: "seller_pitch",
-        title: "Someone has what you want!",
-        body: `${sellerAnon} has a match for your request: "${buyerRequest.title}"`,
-        data: { pitch_id: pitch[0].id, request_id }
-      });
-    }
+    if (io) io.to(`user:${buyerReq.user_id}`).emit("notification", { type: "new_pitch", title: "New pitch received!", data: { request_id, pitch_id: pitch.id } });
 
-    res.status(201).json({ ok: true, pitch: pitch[0], message: "Pitch sent! The buyer has been notified." });
+    res.status(201).json({ ok: true, pitch });
   } catch (err) { next(err); }
 });
 
-// ── POST /api/pitches/:id/accept — Buyer accepts a pitch (pays to reveal seller contact) ──
+// ── POST /api/pitches/:id/accept — Buyer accepts pitch, pays KSh 260 ─────────
+// Reveals seller contact; payment required unless voucher makes it free
 router.post("/:id/accept", requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { phone, voucher_code } = req.body;
+    const { email, phone, voucher_code } = req.body;
 
-    // Get the pitch
+    // Get pitch with request info
     const { rows: pitchRows } = await query(
-      `SELECT p.*, r.user_id AS buyer_id, r.title AS request_title
-       FROM seller_pitches p JOIN buyer_requests r ON r.id=p.request_id
-       WHERE p.id=$1`, [id]
+      `SELECT p.*, r.user_id AS buyer_id, r.title AS request_title, r.description AS request_description
+       FROM seller_pitches p
+       JOIN buyer_requests r ON r.id=p.request_id
+       WHERE p.id=$1`,
+      [id]
     );
     if (!pitchRows.length) return res.status(404).json({ error: "Pitch not found" });
     const pitch = pitchRows[0];
@@ -84,7 +73,7 @@ router.post("/:id/accept", requireAuth, async (req, res, next) => {
     // Check for existing confirmed payment on this pitch
     const { rows: existingPay } = await query(
       `SELECT id FROM payments WHERE listing_id IS NULL AND payer_id=$1 AND status='confirmed'
-       AND mpesa_receipt LIKE 'PITCH-%'`,
+      AND mpesa_receipt LIKE 'WS-PITCH-%'`,
       [req.user.id]
     );
 
@@ -94,10 +83,10 @@ router.post("/:id/accept", requireAuth, async (req, res, next) => {
     if (voucher_code) {
       const { rows: vrows } = await query(
         `SELECT * FROM vouchers WHERE code=$1 AND active=true
-         AND (expires_at IS NULL OR expires_at > NOW()) AND uses < max_uses`,
+        AND (expires_at IS NULL OR expires_at > NOW()) AND uses < max_uses`,
         [voucher_code.toUpperCase()]
       );
-      if (vrows.length) { voucherRow = vrows[0]; discountPct = voucherRow.discount_percent || 0; }
+      if (vrows.length) { voucherRow = vrows[0]; discountPct = vrows[0].discount_percent || 0; }
     }
 
     const PITCH_FEE = 260;
@@ -122,27 +111,33 @@ router.post("/:id/accept", requireAuth, async (req, res, next) => {
       return res.json({ ok: true, unlocked: true, seller_contact: { name: seller[0].name, phone: seller[0].phone, email: seller[0].email } });
     }
 
-    if (!phone) return res.status(400).json({ error: "phone is required for paid reveal" });
+    if (!email) return res.status(400).json({ error: "email is required for paid reveal" });
 
-    // Initiate M-Pesa STK Push
-    const { initiateSTKPush } = require("../services/mpesa.service");
+    // Generate Paystack reference
+    const reference = `WS-PITCH-${id.slice(0,8).toUpperCase()}-${Date.now()}`;
+
+    // Create payment record
     const { rows: payRow } = await query(
-      `INSERT INTO payments (payer_id,type,amount_kes,mpesa_phone,status,pitch_id) VALUES ($1,'pitch_reveal',$2,$3,'pending',$4) RETURNING id`,
-      [req.user.id, finalAmount, phone, id]
+      `INSERT INTO payments (payer_id,type,amount_kes,mpesa_phone,mpesa_receipt,status,pitch_id) VALUES ($1,'pitch_reveal',$2,$3,$4,'pending',$5) RETURNING id`,
+      [req.user.id, finalAmount, phone || '', reference, id]
     );
     const paymentId = payRow[0].id;
     if (voucherRow) await query(`UPDATE vouchers SET uses=uses+1 WHERE id=$1`, [voucherRow.id]);
 
-    const result = await initiateSTKPush({
-      phone, amount: finalAmount,
-      accountRef: `WS-PITCH-${id.slice(0,8).toUpperCase()}`,
-      description: `Weka Soko — reveal seller contact`,
-      paymentId,
+    // Initialize Paystack transaction
+    const paystackResult = await initializeTransaction({
+      email,
+      amount: finalAmount,
+      phone: phone || '',
+      reference,
+      description: `Reveal seller contact for: ${pitch.request_title}`,
+      metadata: { payment_id: paymentId, pitch_id: id, type: 'pitch_reveal', request_id: pitch.request_id }
     });
 
     res.json({
-      message: "STK Push sent. Enter your M-Pesa PIN to reveal seller contact.",
-      checkoutRequestId: result.checkoutRequestId,
+      message: "Payment initialized. Complete payment on the checkout page.",
+      authorization_url: paystackResult.authorization_url,
+      reference: paystackResult.reference,
       paymentId,
       finalAmount,
     });
@@ -168,30 +163,26 @@ router.get("/mine", requireAuth, async (req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT p.*, r.title AS request_title, r.description AS request_description,
-              r.budget, r.county AS request_county
-       FROM seller_pitches p JOIN buyer_requests r ON r.id=p.request_id
-       WHERE p.seller_id=$1 ORDER BY p.created_at DESC`,
+      r.budget, r.county AS request_county
+      FROM seller_pitches p JOIN buyer_requests r ON r.id=p.request_id
+      WHERE p.seller_id=$1 ORDER BY p.created_at DESC`,
       [req.user.id]
     );
     res.json(rows);
   } catch (err) { next(err); }
 });
 
-// ── GET /api/pitches/for-request/:requestId — Buyer sees pitches on their request ──
-router.get("/for-request/:requestId", requireAuth, async (req, res, next) => {
+// ── GET /api/pitches/for-me — Buyer sees pitches on their requests ───────────
+router.get("/for-me", requireAuth, async (req, res, next) => {
   try {
-    const { rows: reqRows } = await query(`SELECT user_id FROM buyer_requests WHERE id=$1`, [req.params.requestId]);
-    if (!reqRows.length) return res.status(404).json({ error: "Request not found" });
-    if (reqRows[0].user_id !== req.user.id) return res.status(403).json({ error: "Not your request" });
     const { rows } = await query(
-      `SELECT p.id, p.message, p.offered_price, p.status, p.created_at,
-              u.anon_tag AS seller_anon,
-              CASE WHEN p.status='accepted' THEN u.name ELSE NULL END AS seller_name,
-              CASE WHEN p.status='accepted' THEN u.phone ELSE NULL END AS seller_phone,
-              CASE WHEN p.status='accepted' THEN u.email ELSE NULL END AS seller_email
-       FROM seller_pitches p JOIN users u ON u.id=p.seller_id
-       WHERE p.request_id=$1 AND p.status!='withdrawn' ORDER BY p.created_at DESC`,
-      [req.params.requestId]
+      `SELECT p.*, r.title AS request_title, u.name AS seller_name, u.anon_tag AS seller_anon_tag,
+      EXISTS (SELECT 1 FROM payments WHERE payer_id=$1 AND pitch_id=p.id AND status='confirmed') AS paid
+      FROM seller_pitches p
+      JOIN buyer_requests r ON r.id=p.request_id
+      JOIN users u ON u.id=p.seller_id
+      WHERE r.user_id=$1 ORDER BY p.created_at DESC`,
+      [req.user.id]
     );
     res.json(rows);
   } catch (err) { next(err); }

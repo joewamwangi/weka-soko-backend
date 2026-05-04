@@ -1,20 +1,21 @@
-// src/routes/payments.js
+// src/routes/payments.js — Paystack integration for Starter accounts
 const express = require("express");
 const { query, withTransaction } = require("../db/pool");
 const { requireAuth } = require("../middleware/auth");
-const { initiateSTKPush, handleCallback, querySTKStatus } = require("../services/mpesa.service");
-const { safePaymentUpdate, ConcurrencyError } = require("../services/concurrency.service");
+const { initializeTransaction, verifyTransaction, handleWebhook } = require("../services/paystack.service");
 
 const router = express.Router();
 const { sendPushToUser } = require("./push");
-const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "250");
+const { sendPaymentConfirmationEmail } = require("../services/notification.service");
+
+const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "260");
 const ESCROW_FEE_PCT = parseFloat(process.env.ESCROW_FEE_PERCENT || "5.5") / 100;
 
 // ── POST /api/payments/unlock ──────────────────────────────────────────────────
-// Uses optimistic locking to prevent double-unlock race conditions
+// Initialize Paystack payment for unlocking seller contact
 router.post("/unlock", requireAuth, async (req, res, next) => {
   try {
-    const { listing_id, phone, voucher_code, version } = req.body;
+    const { listing_id, email, voucher_code } = req.body;
     if (!listing_id) return res.status(400).json({ error: "listing_id is required" });
 
     const { rows: listingRows } = await query(
@@ -28,14 +29,6 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: "Only the seller can unlock this listing" });
     if (listing.is_contact_public)
       return res.status(400).json({ error: "Listing is already unlocked" });
-
-    if (version !== undefined && version !== listing.version) {
-      return res.status(409).json({
-        error: "Listing was modified by another request. Please refresh and try again.",
-        code: "OPTIMISTIC_LOCK_FAILED",
-        currentVersion: listing.version
-      });
-    }
 
     let discountPct = 0, voucherRow = null;
     if (voucher_code) {
@@ -57,300 +50,376 @@ router.post("/unlock", requireAuth, async (req, res, next) => {
     if (existingPayment.length)
       return res.status(400).json({ error: "Payment already confirmed for this listing" });
 
-    if (finalAmount === 0) {
-      const result = await withTransaction(async (client) => {
-        if (voucherRow) await client.query(`UPDATE vouchers SET uses = uses + 1, version = version + 1 WHERE id = $1`, [voucherRow.id]);
-        const { rows: paymentRows } = await client.query(
-          `INSERT INTO payments (payer_id, listing_id, type, amount_kes, mpesa_phone, status, confirmed_at, mpesa_receipt, version) VALUES ($1,$2,'unlock',0,'voucher','confirmed',NOW(),$3,1) RETURNING *`,
-          [req.user.id, listing_id, `VOUCHER-${voucher_code}`]
-        );
+    // Get user email for Paystack
+    const userEmail = email || req.user.email;
+    if (!userEmail) return res.status(400).json({ error: "email is required for payment" });
 
-        const unlockResult = await client.query(
-          `UPDATE listings SET unlocked_at = NOW(), is_contact_public = TRUE, version = version + 1 WHERE id = $1 AND version = $2 RETURNING *`,
-          [listing_id, listing.version]
-        );
+    // Generate unique reference
+    const reference = `WS-UNLOCK-${listing_id.slice(0,8).toUpperCase()}-${Date.now()}`;
 
-        if (!unlockResult.rowCount) {
-          throw new ConcurrencyError("Listing was modified by another request. Please refresh.", "OPTIMISTIC_LOCK_FAILED");
-        }
-
-        return paymentRows[0];
-      });
-
-      const { rows: unlocked } = await query(
-        `SELECT l.*, u.name AS seller_name, u.phone AS seller_phone, u.email AS seller_email FROM listings l JOIN users u ON u.id = l.seller_id WHERE l.id = $1`,
-        [listing_id]
-      );
-      const unlockPayload = { type: "listing_unlocked", title: "🔓 Contact Info Unlocked!", body: `Your listing "${listing.title}" is now unlocked. Buyers can see your contact info.`, data: { listing_id } };
-      await query(`INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`, [listing.seller_id, unlockPayload.type, unlockPayload.title, unlockPayload.body, JSON.stringify(unlockPayload.data)]).catch(()=>{});
-      sendPushToUser(listing.seller_id, unlockPayload).catch(()=>{});
-      return res.json({ unlocked: true, listing: unlocked[0], message: "Contact details unlocked via voucher!" });
-    }
-
-    if (!phone) return res.status(400).json({ error: "phone is required for paid unlock" });
-
+    // Create payment record
     const { rows: paymentRows } = await query(
-      `INSERT INTO payments (payer_id, listing_id, type, amount_kes, mpesa_phone, version) VALUES ($1,$2,'unlock',$3,$4,1) RETURNING id`,
-      [req.user.id, listing_id, finalAmount, phone]
+      `INSERT INTO payments (payer_id, listing_id, type, amount_kes, mpesa_phone, mpesa_receipt, status) VALUES ($1,$2,'unlock',$3,$4,$5,'pending') RETURNING id`,
+      [req.user.id, listing_id, finalAmount, req.user.phone || '', reference]
     );
     const paymentId = paymentRows[0].id;
-    if (voucherRow) await query(`UPDATE vouchers SET uses = uses + 1, version = version + 1 WHERE id = $1`, [voucherRow.id]);
+    
+    if (voucherRow) await query(`UPDATE vouchers SET uses = uses + 1 WHERE id = $1`, [voucherRow.id]);
 
-    const result = await initiateSTKPush({
-      phone, amount: finalAmount,
-      accountRef: `WS-UNLOCK-${listing_id.slice(0,8).toUpperCase()}`,
-      description: `Weka Soko unlock - ${listing.title}`,
-      paymentId,
+    // Initialize Paystack transaction
+    const paystackResult = await initializeTransaction({
+      email: userEmail,
+      amount: finalAmount,
+      phone: req.user.phone || '',
+      reference,
+      description: `Unlock contact for: ${listing.title}`,
+      metadata: { payment_id: paymentId, listing_id, type: 'unlock', voucher_code: voucher_code || null }
     });
-    res.json({ message: "STK Push sent. Enter your M-Pesa PIN to confirm.", checkoutRequestId: result.checkoutRequestId, paymentId, finalAmount, discountPct });
-  } catch (err) {
-    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
-    next(err);
-  }
+
+    res.json({ 
+      message: "Payment initialized. Complete payment on the checkout page.", 
+      authorization_url: paystackResult.authorization_url,
+      reference: paystackResult.reference,
+      paymentId, 
+      finalAmount, 
+      discountPct 
+    });
+
+  } catch (err) { next(err); }
 });
 
 // ── POST /api/payments/escrow ──────────────────────────────────────────────────
 // Uses SELECT FOR UPDATE to prevent race conditions when creating escrow
 router.post("/escrow", requireAuth, async (req, res, next) => {
   try {
-    const { listing_id, phone } = req.body;
-    if (!listing_id || !phone) return res.status(400).json({ error: "listing_id and phone are required" });
+    const { listing_id, email } = req.body;
+    if (!listing_id || !email) return res.status(400).json({ error: "listing_id and email are required" });
+    
+    const { rows: listingRows } = await query(`SELECT * FROM listings WHERE id = $1 AND status != 'deleted'`, [listing_id]);
+    if (!listingRows.length) return res.status(404).json({ error: "Listing not found" });
+    const listing = listingRows[0];
+    if (listing.seller_id === req.user.id) return res.status(400).json({ error: "Seller cannot use escrow for their own listing" });
+    
+    const { rows: existingEscrow } = await query(`SELECT id FROM escrows WHERE listing_id = $1 AND status = 'holding'`, [listing_id]);
+    if (existingEscrow.length) return res.status(409).json({ error: "An escrow is already active for this listing" });
+    
+    const feeAmount = Math.round(listing.price * ESCROW_FEE_PCT);
+    const totalAmount = Math.round(listing.price + feeAmount);
+    const releaseAfter = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
-    const result = await withTransaction(async (client) => {
-      const { rows: listingRows } = await client.query(
-        `SELECT * FROM listings WHERE id = $1 AND status != 'deleted' FOR UPDATE`,
-        [listing_id]
-      );
-      if (!listingRows.length) throw new ConcurrencyError("Listing not found", "NOT_FOUND");
-      const listing = listingRows[0];
+    // Generate unique reference
+    const reference = `WS-ESCROW-${listing_id.slice(0,8).toUpperCase()}-${Date.now()}`;
 
-      if (listing.seller_id === req.user.id)
-        throw new ConcurrencyError("Seller cannot use escrow for their own listing", "SELF_ESCROW");
-
-      const { rows: existingEscrow } = await client.query(
-        `SELECT id FROM escrows WHERE listing_id = $1 AND status = 'holding' FOR UPDATE`,
-        [listing_id]
-      );
-      if (existingEscrow.length)
-        throw new ConcurrencyError("An escrow is already active for this listing", "ESCROW_EXISTS");
-
-      const feeAmount = Math.round(listing.price * ESCROW_FEE_PCT);
-      const totalAmount = listing.price + feeAmount;
-
+    await withTransaction(async (client) => {
       const { rows: paymentRows } = await client.query(
-        `INSERT INTO payments (payer_id, listing_id, type, amount_kes, mpesa_phone, version) VALUES ($1,$2,'escrow',$3,$4,1) RETURNING id`,
-        [req.user.id, listing_id, totalAmount, phone]
+        `INSERT INTO payments (payer_id, listing_id, type, amount_kes, mpesa_phone, mpesa_receipt, status) VALUES ($1,$2,'escrow',$3,$4,$5,'pending') RETURNING id`,
+        [req.user.id, listing_id, totalAmount, '', reference]
       );
       const paymentId = paymentRows[0].id;
-      const releaseAfter = new Date(Date.now() + 48 * 60 * 60 * 1000);
-      await client.query(
-        `INSERT INTO escrows (listing_id, buyer_id, seller_id, payment_id, item_amount, fee_amount, total_amount, status, release_after, version) VALUES ($1,$2,$3,$4,$5,$6,$7,'holding',$8,1)`,
-        [listing_id, req.user.id, listing.seller_id, paymentId, listing.price, feeAmount, totalAmount, releaseAfter]
-      );
-      await client.query(`UPDATE listings SET status = 'locked', version = version + 1 WHERE id = $1`, [listing_id]);
-      return { paymentId, listing, totalAmount, feeAmount };
-    });
 
-    const stkResult = await initiateSTKPush({ phone, amount: result.totalAmount, accountRef: `WS-ESCROW-${listing_id.slice(0,8).toUpperCase()}`, description: `Weka Soko escrow - ${result.listing.title}`, paymentId: result.paymentId });
-    res.json({ message: `STK Push sent for KSh ${result.totalAmount.toLocaleString()} (includes 5.5% escrow fee). Enter your M-Pesa PIN.`, checkoutRequestId: stkResult.checkoutRequestId, breakdown: { item_price: result.listing.price, escrow_fee: result.feeAmount, total: result.totalAmount } });
-  } catch (err) {
-    if (err.code === "ESCROW_EXISTS") return res.status(409).json({ error: err.message, code: err.code });
-    if (err.code === "NOT_FOUND") return res.status(404).json({ error: err.message, code: err.code });
-    if (err.code === "SELF_ESCROW") return res.status(400).json({ error: err.message, code: err.code });
-    next(err);
+await client.query(
+      `INSERT INTO escrows (listing_id, buyer_id, seller_id, payment_id, item_amount, fee_amount, total_amount, amount_kes, status, release_after) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9)`,
+      [listing_id, req.user.id, listing.seller_id, paymentId, listing.price, feeAmount, totalAmount, totalAmount, releaseAfter]
+    );
+
+      // Initialize Paystack transaction
+      const paystackResult = await initializeTransaction({
+        email,
+        amount: totalAmount,
+        phone: req.user.phone || '',
+        reference,
+        description: `Escrow payment for: ${listing.title}`,
+        metadata: { payment_id: paymentId, listing_id, type: 'escrow', seller_id: listing.seller_id, buyer_id: req.user.id }
+      });
+
+      res.json({ 
+        message: "Escrow payment initialized. Complete payment on the checkout page.",
+        authorization_url: paystackResult.authorization_url,
+        reference: paystackResult.reference,
+        paymentId,
+        breakdown: { item_price: listing.price, escrow_fee: feeAmount, total: totalAmount }
+      });
+    });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/payments/paystack/webhook ──────────────────────────────────────────────
+// Paystack webhook handler
+router.post("/paystack/webhook", async (req, res, next) => {
+  try {
+    const signature = req.headers['x-paystack-signature'];
+    const { event, data } = await handleWebhook(req.body, signature);
+
+    // Acknowledge receipt immediately
+    res.status(200).json({ received: true });
+
+    // Process asynchronously
+    if (event === 'charge.success') {
+      const { reference, amount, status, metadata } = data;
+      
+      // Update payment record
+      const { rows: paymentRows } = await query(
+        `UPDATE payments SET status = 'confirmed', confirmed_at = NOW() WHERE mpesa_receipt = $1 RETURNING *`,
+        [reference]
+      );
+      
+      if (paymentRows.length) {
+        const payment = paymentRows[0];
+        
+        if (payment.type === 'unlock') {
+          await query(`UPDATE listings SET is_contact_public = TRUE, unlocked_at = NOW() WHERE id = $1`, [payment.listing_id]);
+          
+          // Get listing details for notification
+          const { rows: listingRows } = await query(
+            `SELECT l.*, u.name AS seller_name, u.email AS seller_email FROM listings l JOIN users u ON u.id = l.seller_id WHERE l.id = $1`,
+            [payment.listing_id]
+          );
+          
+          if (listingRows.length) {
+            const listing = listingRows[0];
+            
+            // Notify seller
+            await query(
+              `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`,
+              [listing.seller_id, 'listing_unlocked', 'Contact Info Unlocked', 
+               `Your listing "${listing.title}" is now unlocked. Buyers can see your contact info.`,
+               JSON.stringify({ listing_id: listing.id })]
+            ).catch(()=>{});
+            
+            sendPushToUser(listing.seller_id, {
+              type: "listing_unlocked",
+              title: "Contact Info Unlocked",
+              body: `Your listing "${listing.title}" is now unlocked.`,
+              data: { listing_id: listing.id }
+            }).catch(()=>{});
+
+            // Send confirmation email
+            try {
+              await sendPaymentConfirmationEmail({
+                to: listing.seller_email,
+                name: listing.seller_name,
+                type: 'unlock',
+                listingTitle: listing.title,
+                amount: payment.amount_kes,
+                receipt: reference
+              });
+            } catch (e) { console.error('Email error:', e); }
+          }
+        } else if (payment.type === 'escrow') {
+          await query(`UPDATE escrows SET status = 'holding' WHERE payment_id = $1`, [payment.id]);
+          
+          // Notify both parties
+          const { rows: escrowRows } = await query(
+            `SELECT e.*, l.title, l.seller_id, e.buyer_id FROM escrows e JOIN listings l ON l.id = e.listing_id WHERE e.payment_id = $1`,
+            [payment.id]
+          );
+          
+          if (escrowRows.length) {
+            const escrow = escrowRows[0];
+            
+            // Notify buyer
+            await query(
+              `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`,
+              [escrow.buyer_id, 'escrow_confirmed', 'Escrow Payment Confirmed',
+               `Your escrow payment for "${escrow.title}" has been confirmed. Funds are held securely.`,
+               JSON.stringify({ escrow_id: escrow.id, listing_id: escrow.listing_id })]
+            ).catch(()=>{});
+
+            // Notify seller
+            await query(
+              `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`,
+              [escrow.seller_id, 'escrow_received', 'Escrow Payment Received',
+               `Payment received for "${escrow.title}". Funds held until buyer confirms receipt.`,
+               JSON.stringify({ escrow_id: escrow.id, listing_id: escrow.listing_id })]
+            ).catch(()=>{});
+          }
+        }
+      }
+    }
+  } catch (err) { 
+    console.error('Webhook error:', err);
+    res.status(200).json({ received: true }); // Still return 200 to prevent retries
   }
 });
 
-// ── POST /api/payments/mpesa/callback ──────────────────────────────────────────────
-router.post("/mpesa/callback", async (req, res, next) => {
+// ── GET /api/payments/status/:reference ──────────────────────────────────────────────
+// Check payment status by Paystack reference
+router.get("/status/:reference", async (req, res, next) => {
   try {
-    const result = await handleCallback(req.body);
-    res.status(200).json({ ResultCode: 0, ResultDesc: "Accepted" });
-    if (!result.success) console.warn("M-Pesa callback failure:", result);
-  } catch (err) { console.error("M-Pesa callback error:", err); res.status(200).json({ ResultCode: 0, ResultDesc: "Accepted" }); }
-});
-
-// ── GET /api/payments/status/:checkoutRequestId ──────────────────────────────────────────
-router.get("/status/:checkoutRequestId", requireAuth, async (req, res, next) => {
-  try {
-    const { rows } = await query(`SELECT id, status, type, listing_id, confirmed_at, mpesa_receipt FROM payments WHERE mpesa_checkout_id = $1`, [req.params.checkoutRequestId]);
+    const { rows } = await query(
+      `SELECT id, status, type, listing_id, confirmed_at, mpesa_receipt FROM payments WHERE mpesa_receipt = $1`,
+      [req.params.reference]
+    );
+    
     if (!rows.length) return res.status(404).json({ error: "Payment not found" });
+    
     const payment = rows[0];
-    if (payment.status === "confirmed") return res.json({ status: "confirmed", payment });
-    if (payment.status === "failed") return res.json({ status: "failed", payment });
+    
+    if (payment.status === 'confirmed') {
+      return res.json({ status: "confirmed", payment });
+    }
+    
+    // Verify with Paystack
     try {
-      const darajaStatus = await querySTKStatus(req.params.checkoutRequestId);
-      if (darajaStatus.ResultCode === "0") return res.json({ status: "pending_confirmation", daraja: darajaStatus });
-    } catch {}
+      const paystackStatus = await verifyTransaction(req.params.reference);
+      if (paystackStatus.status && paystackStatus.data.status === 'success') {
+        // Update if Paystack says it's successful but we haven't recorded it
+        await query(`UPDATE payments SET status = 'confirmed', confirmed_at = NOW() WHERE id = $1`, [payment.id]);
+        return res.json({ status: "confirmed", payment: { ...payment, status: 'confirmed' } });
+      }
+    } catch (e) { console.error('Paystack verify error:', e); }
+    
     res.json({ status: payment.status, payment });
   } catch (err) { next(err); }
 });
 
 // ── POST /api/payments/escrow/:id/confirm-receipt ──────────────────────────────────────────
-// Uses optimistic locking to prevent double-confirmation race conditions
+// Buyer confirms receipt, release funds to seller
 router.post("/escrow/:id/confirm-receipt", requireAuth, async (req, res, next) => {
   try {
-    const { version } = req.body;
-    const { rows } = await query(`SELECT * FROM escrows WHERE id = $1 AND buyer_id = $2 AND status = 'holding'`, [req.params.id, req.user.id]);
-    if (!rows.length) return res.status(404).json({ error: "Escrow not found or not yours" });
+    const { rows } = await query(
+      `SELECT e.*, l.title, l.seller_id, l.locked_buyer_id, p.mpesa_receipt, p.amount_kes, u.name AS seller_name, u.email AS seller_email
+       FROM escrows e
+       JOIN listings l ON l.id = e.listing_id
+       JOIN payments p ON p.id = e.payment_id
+       JOIN users u ON u.id = e.seller_id
+       WHERE e.id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
     const escrow = rows[0];
+    if (escrow.locked_buyer_id !== req.user.id) return res.status(403).json({ error: "Only the buyer can confirm receipt" });
+    if (escrow.status !== "holding") return res.status(400).json({ error: "Escrow is not in holding state" });
 
-    if (version !== undefined && version !== escrow.version) {
-      return res.status(409).json({
-        error: "Escrow was modified by another request. Please refresh and try again.",
-        code: "OPTIMISTIC_LOCK_FAILED",
-        currentVersion: escrow.version
+    await query(`UPDATE escrows SET status = 'released', released_at = NOW() WHERE id = $1`, [req.params.id]);
+    
+    // Notify seller that funds are released
+    await query(
+      `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`,
+      [escrow.seller_id, 'escrow_released', 'Funds Released',
+       `Buyer confirmed receipt. Your payment for "${escrow.title}" has been released.`,
+       JSON.stringify({ escrow_id: escrow.id, listing_id: escrow.listing_id })]
+    ).catch(()=>{});
+
+    // Send confirmation to seller
+    try {
+      const { sendEscrowReleasedEmail } = require("../services/notification.service");
+      await sendEscrowReleasedEmail({
+        to: escrow.seller_email,
+        name: escrow.seller_name,
+        listingTitle: escrow.title,
+        amount: escrow.amount_kes,
+        receipt: escrow.mpesa_receipt
       });
-    }
+    } catch (e) { console.error('Email error:', e); }
 
-    const result = await withTransaction(async (client) => {
-      const updateResult = await client.query(
-        `UPDATE escrows SET buyer_confirmed=TRUE, buyer_confirmed_at=NOW(), status='released', released_at=NOW(), released_by=$1, version=version+1 WHERE id=$2 AND version=$3 RETURNING *`,
-        [req.user.id, req.params.id, escrow.version]
-      );
-
-      if (!updateResult.rowCount) {
-        throw new ConcurrencyError("Escrow was modified by another request. Please refresh.", "OPTIMISTIC_LOCK_FAILED");
-      }
-
-      await client.query(`UPDATE listings SET status='sold', version=version+1 WHERE id=$1`, [escrow.listing_id]);
-      return updateResult.rows[0];
-    });
-
-    const escrowReleasePayload = { type: "escrow_released", title: "💰 Funds Released!", body: "The buyer confirmed receipt. Your payment has been released — check your M-Pesa.", data: { escrow_id: req.params.id } };
-    await query(`INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'escrow_released','💰 Funds Released!',$2,$3)`, [escrow.seller_id, escrowReleasePayload.body, JSON.stringify({ escrow_id: req.params.id })]);
-    sendPushToUser(escrow.seller_id, escrowReleasePayload).catch(()=>{});
-    res.json({ message: "Receipt confirmed. Funds released to seller." });
-  } catch (err) {
-    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
-    next(err);
-  }
+    res.json({ ok: true, message: "Receipt confirmed. Seller has been notified." });
+  } catch (err) { next(err); }
 });
 
 // ── POST /api/payments/escrow/:id/dispute ─────────────────────────────────────────────────────
-// Uses optimistic locking to prevent race conditions
+// Buyer opens a dispute
 router.post("/escrow/:id/dispute", requireAuth, async (req, res, next) => {
   try {
-    const { reason, version } = req.body;
-    if (!reason) return res.status(400).json({ error: "Reason for dispute is required" });
-    const { rows } = await query(`SELECT * FROM escrows WHERE id=$1 AND buyer_id=$2 AND status='holding'`, [req.params.id, req.user.id]);
-    if (!rows.length) return res.status(404).json({ error: "Escrow not found or already resolved" });
+    const { reason } = req.body;
+    const { rows } = await query(
+      `SELECT e.*, l.title, l.seller_id, l.locked_buyer_id FROM escrows e JOIN listings l ON l.id = e.listing_id WHERE e.id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Escrow not found" });
     const escrow = rows[0];
+    if (escrow.locked_buyer_id !== req.user.id) return res.status(403).json({ error: "Only the buyer can dispute" });
+    if (escrow.status !== "holding") return res.status(400).json({ error: "Escrow is not in holding state" });
 
-    if (version !== undefined && version !== escrow.version) {
-      return res.status(409).json({
-        error: "Escrow was modified by another request. Please refresh and try again.",
-        code: "OPTIMISTIC_LOCK_FAILED",
-        currentVersion: escrow.version
-      });
+    await query(
+      `INSERT INTO disputes (escrow_id, listing_id, opened_by, reason, status, opened_at) VALUES ($1,$2,$3,$4,'open',NOW())`,
+      [escrow.id, escrow.listing_id, req.user.id, reason || '']    );
+    await query(`UPDATE escrows SET status = 'disputed' WHERE id = $1`, [req.params.id]);
+
+    // Notify admin
+    const { rows: admins } = await query(`SELECT id FROM users WHERE role = 'admin'`);
+    for (const admin of admins) {
+      await query(
+        `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,$2,$3,$4,$5)`,
+        [admin.id, 'new_dispute', 'New Escrow Dispute',
+         `A dispute has been opened for "${escrow.title}"`,
+         JSON.stringify({ escrow_id: escrow.id, listing_id: escrow.listing_id })]
+      ).catch(()=>{});
     }
 
-    const result = await withTransaction(async (client) => {
-      const updateResult = await client.query(
-        `UPDATE escrows SET status='disputed', version=version+1 WHERE id=$1 AND version=$2 RETURNING *`,
-        [req.params.id, escrow.version]
-      );
-
-      if (!updateResult.rowCount) {
-        throw new ConcurrencyError("Escrow was modified by another request. Please refresh.", "OPTIMISTIC_LOCK_FAILED");
-      }
-
-      await client.query(`INSERT INTO disputes (escrow_id, raised_by, reason) VALUES ($1,$2,$3)`, [req.params.id, req.user.id, reason]);
-      return updateResult.rows[0];
-    });
-
-    res.json({ message: "Dispute raised. Our team will review within 24 hours." });
-  } catch (err) {
-    if (err.code === "OPTIMISTIC_LOCK_FAILED") return res.status(409).json({ error: err.message, code: err.code });
-    next(err);
-  }
-});
-
-// ── POST /api/payments/retry ──────────────────────────────────────────────────
-// Risk 2: User can retry a failed STK push without losing their payment record
-router.post("/retry", requireAuth, async (req, res, next) => {
-  try {
-    const { payment_id, phone } = req.body;
-    if (!payment_id || !phone) return res.status(400).json({ error: "payment_id and phone required" });
-    const { rows } = await query(
-      `SELECT * FROM payments WHERE id=$1 AND payer_id=$2 AND status='pending'`,
-      [payment_id, req.user.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: "Pending payment not found" });
-    const payment = rows[0];
-    const result = await initiateSTKPush({
-      phone,
-      amount: payment.amount_kes,
-      accountRef: `WS-RETRY-${payment.listing_id?.slice(0,8).toUpperCase() || payment_id.slice(0,8).toUpperCase()}`,
-      description: `Weka Soko payment retry`,
-      paymentId: payment.id,
-    });
-    await query(`UPDATE payments SET mpesa_phone=$1, updated_at=NOW() WHERE id=$2`, [phone, payment.id]);
-    res.json({ message: "STK Push resent. Enter your M-Pesa PIN.", checkoutRequestId: result.checkoutRequestId });
+    res.json({ ok: true, message: "Dispute opened. An admin will review it shortly." });
   } catch (err) { next(err); }
 });
 
 // ── POST /api/payments/verify-manual ───────────────────────────────────────────────────────────
-// Uses transaction with row locking to prevent double-confirmation race conditions
+// Manual payment verification (for admin or webhook fallback)
 router.post("/verify-manual", requireAuth, async (req, res, next) => {
   try {
-    const { mpesa_code, listing_id, type, version } = req.body;
-    if (!mpesa_code || !listing_id || !type) return res.status(400).json({ error: "mpesa_code, listing_id and type are required" });
-    const code = mpesa_code.trim().toUpperCase();
+    const { paystack_ref, listing_id, type } = req.body;
+    if (!paystack_ref || !listing_id || !type) return res.status(400).json({ error: "paystack_ref, listing_id and type are required" });
+    
+    const reference = paystack_ref.trim().toUpperCase();
+    
+    // Check if already confirmed
+    const { rows: existing } = await query(`SELECT id, status FROM payments WHERE mpesa_receipt = $1`, [reference]);
+    if (existing.length && existing[0].status === 'confirmed') {
+      return res.status(400).json({ error: "Payment already confirmed" });
+    }
 
-    const result = await withTransaction(async (client) => {
-      const { rows: existing } = await client.query(
-        `SELECT id, status FROM payments WHERE mpesa_receipt = $1 FOR UPDATE`,
-        [code]
-      );
-      if (existing.length && existing[0].status === "confirmed") {
-        throw new ConcurrencyError("This transaction code has already been used.", "ALREADY_USED");
-      }
+    // Verify with Paystack
+    const paystackStatus = await verifyTransaction(reference);
+    if (!paystackStatus.status || paystackStatus.data.status !== 'success') {
+      return res.status(400).json({ error: "Payment not verified with Paystack" });
+    }
 
-      const { rows: payments } = await client.query(
-        `SELECT * FROM payments WHERE listing_id=$1 AND type=$2 AND payer_id=$3 AND status='pending' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [listing_id, type, req.user.id]
-      );
+    // Update payment
+    const { rows: payments } = await query(
+      `SELECT * FROM payments WHERE listing_id=$1 AND type=$2 AND mpesa_receipt=$3 ORDER BY created_at DESC LIMIT 1`,
+      [listing_id, type, reference]
+    );
+    if (!payments.length) return res.status(404).json({ error: "Payment record not found" });
+    
+    await query(`UPDATE payments SET status='confirmed', confirmed_at=NOW() WHERE id=$1`, [payments[0].id]);
 
-      let paymentId;
-      if (!payments.length) {
-        const { rows: listingRows } = await client.query(`SELECT * FROM listings WHERE id=$1 FOR UPDATE`, [listing_id]);
-        if (!listingRows.length) throw new ConcurrencyError("Listing not found", "NOT_FOUND");
-        const amount = type === "unlock" ? parseInt(process.env.UNLOCK_FEE_KES || "250") : listingRows[0].price;
-        const { rows: newPayment } = await client.query(
-          `INSERT INTO payments (payer_id,listing_id,type,amount_kes,mpesa_phone,version) VALUES ($1,$2,$3,$4,$5,1) RETURNING id`,
-          [req.user.id, listing_id, type, amount, "manual"]
-        );
-        paymentId = newPayment[0].id;
-      } else {
-        paymentId = payments[0].id;
-      }
+    if (type === 'unlock') {
+      await query(`UPDATE listings SET is_contact_public=TRUE, unlocked_at=NOW() WHERE id=$1`, [listing_id]);
+    } else if (type === 'escrow') {
+      await query(`UPDATE escrows SET status='holding' WHERE payment_id=$1`, [payments[0].id]);
+    }
 
-      await client.query(
-        `UPDATE payments SET status='confirmed', mpesa_receipt=$1, confirmed_at=NOW(), version=version+1 WHERE id=$2`,
-        [code, paymentId]
-      );
+    res.json({ ok: true, message: `Payment confirmed with reference ${reference}` });
+  } catch (err) { next(err); }
+});
 
-      if (type === "unlock") {
-        await client.query(
-          `UPDATE listings SET status='pending_review', unlocked_at=NOW(), is_contact_public=TRUE, version=version+1 WHERE id=$1`,
-          [listing_id]
-        );
-        const { rows: unlocked } = await client.query(
-          `SELECT l.*, u.name AS seller_name, u.phone AS seller_phone, u.email AS seller_email FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1`,
-          [listing_id]
-        );
-        return { ok: true, status: "confirmed", receipt: code, listing: unlocked[0] };
-      }
-      return { ok: true, status: "confirmed", receipt: code };
-    });
+// ── POST /api/payments/:id/refund ───────────────────────────────────────────────────────────
+// Process refund for disputed escrow
+router.post("/:id/refund", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT p.*, e.status as escrow_status FROM payments p LEFT JOIN escrows e ON e.payment_id = p.id WHERE p.id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Payment not found" });
+    const payment = rows[0];
+    
+    if (payment.status !== 'confirmed') return res.status(400).json({ error: "Payment not confirmed" });
+    if (payment.type !== 'escrow') return res.status(400).json({ error: "Only escrow payments can be refunded" });
+    if (payment.escrow_status !== 'disputed') return res.status(400).json({ error: "Escrow must be in disputed state" });
 
-    res.json(result);
-  } catch (err) {
-    if (err.code === "ALREADY_USED") return res.status(409).json({ error: err.message, code: err.code });
-    if (err.code === "NOT_FOUND") return res.status(404).json({ error: err.message, code: err.code });
-    next(err);
-  }
+    // Process Paystack refund
+    try {
+      const { processRefund } = require("../services/paystack.service");
+      await processRefund(payment.mpesa_receipt, payment.amount_kes);
+      
+      await query(`UPDATE payments SET status = 'refunded' WHERE id = $1`, [payment.id]);
+      await query(`UPDATE escrows SET status = 'refunded' WHERE payment_id = $1`, [payment.id]);
+      
+      res.json({ ok: true, message: "Refund processed successfully" });
+    } catch (e) {
+      console.error('Refund error:', e);
+      res.status(500).json({ error: "Failed to process refund" });
+    }
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

@@ -153,7 +153,7 @@ async function runMigration() {
       till_number VARCHAR(20) DEFAULT '5673935',
       purpose VARCHAR(60),
       status VARCHAR(30) DEFAULT 'pending',
-      mpesa_receipt VARCHAR(30),
+      mpesa_receipt VARCHAR(100),
       checkout_request_id VARCHAR(100),
       merchant_request_id VARCHAR(100),
       phone_used VARCHAR(20),
@@ -177,8 +177,8 @@ async function runMigration() {
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       listing_id UUID REFERENCES listings(id) ON DELETE SET NULL,
       buyer_id UUID REFERENCES users(id) ON DELETE SET NULL,
-      seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
-      amount_kes NUMERIC(12,2) NOT NULL,
+seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  amount_kes NUMERIC(12,2),
       platform_fee NUMERIC(12,2) DEFAULT 0,
       status VARCHAR(30) DEFAULT 'holding',
       buyer_confirmed BOOLEAN DEFAULT FALSE,
@@ -252,6 +252,16 @@ async function runMigration() {
       is_read BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
+
+    // ── PUSH TOKENS (for mobile app notifications) ────────────────────────────
+    await client.query(`CREATE TABLE IF NOT EXISTS user_push_tokens (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      push_token VARCHAR(255) NOT NULL,
+      platform VARCHAR(10) CHECK (platform IN ('android', 'ios')),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_push_tokens_platform ON user_push_tokens(platform)`).catch(()=>{});
 
     // ── VOUCHERS ──────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS vouchers (

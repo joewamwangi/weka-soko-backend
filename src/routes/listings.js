@@ -24,6 +24,30 @@ const { safeListingUpdate, withLockInTransaction, ConcurrencyError } = require("
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024, files: 8 } });
 
+// ── GET /api/listings/categories ──────────────────────────────────────────────
+// Categories for mobile app
+router.get("/categories", (req, res) => {
+  const categories = [
+    { name: 'Electronics', icon: 'Smartphone', sub: ['Phones & Tablets', 'Laptops', 'TVs & Audio', 'Cameras', 'Gaming', 'Accessories'] },
+    { name: 'Vehicles', icon: 'Car', sub: ['Cars', 'Motorcycles', 'Trucks', 'Buses', 'Boats', 'Vehicle Parts'] },
+    { name: 'Property', icon: 'Home', sub: ['Houses for Sale', 'Land', 'Commercial', 'Short Stays'] },
+    { name: 'Fashion', icon: 'Shirt', sub: ["Men's Clothing", "Women's Clothing", 'Shoes', 'Bags', 'Watches', 'Jewellery'] },
+    { name: 'Furniture', icon: 'Sofa', sub: ['Sofas', 'Beds & Mattresses', 'Tables', 'Wardrobes', 'Office'] },
+    { name: 'Home & Garden', icon: 'Flower', sub: ['Kitchen Appliances', 'Home Decor', 'Garden', 'Cleaning', 'Lighting'] },
+    { name: 'Sports', icon: 'Activity', sub: ['Fitness', 'Bicycles', 'Outdoor Gear', 'Team Sports', 'Water Sports'] },
+    { name: 'Baby & Kids', icon: 'Baby', sub: ['Baby Gear', 'Toys', 'Kids Clothing', 'Kids Furniture', 'School'] },
+    { name: 'Books', icon: 'BookOpen', sub: ['Textbooks', 'Fiction', 'Non-Fiction', 'Courses', 'Instruments'] },
+    { name: 'Agriculture', icon: 'Wheat', sub: ['Livestock', 'Farm Equipment', 'Seeds', 'Produce', 'Irrigation'] },
+    { name: 'Services', icon: 'Wrench', sub: ['Home Services', 'Business', 'Tech', 'Transport', 'Events'] },
+    { name: 'Jobs', icon: 'Briefcase', sub: ['Full-time', 'Part-time', 'Freelance', 'Internship'] },
+    { name: 'Food', icon: 'Utensils', sub: ['Catering Equipment', 'Food Products', 'Restaurant Supplies'] },
+    { name: 'Health & Beauty', icon: 'HeartPulse', sub: ['Health', 'Beauty & Skincare', 'Gym', 'Medical'] },
+    { name: 'Pets', icon: 'Paw', sub: ['Dogs', 'Cats', 'Birds', 'Fish', 'Pet Supplies'] },
+    { name: 'Other', icon: 'Package', sub: ['Miscellaneous'] },
+  ];
+  res.json(categories);
+});
+
 // ── GET /api/listings/counties ────────────────────────────────────────────────
 router.get("/counties", (req, res) => res.json(KENYA_COUNTIES));
 
@@ -197,41 +221,54 @@ if (category) { params.push(category); conditions.push(`l.category ILIKE $${para
 // ── GET /api/listings/admin/sold ──────────────────────────────────────────────
 // Admin only: Get all sold listings with seller and buyer info
 router.get("/admin/sold", requireAuth, async (req, res, next) => {
-try {
-const { q } = req.query;
-let { page=1, limit=50 } = req.query;
-page = parseInt(page, 10);
-limit = parseInt(limit, 10);
-if (!page || isNaN(page) || page < 1) page = 1;
-if (!limit || isNaN(limit) || limit < 1 || limit > 100) limit = 50;
-const offset = (page - 1) * limit;
-const params = [];
-let where = "WHERE l.status='sold'";
-if (q) {
-params.push(`%${q}%`);
-where += ` AND (l.title ILIKE $1 OR u.name ILIKE $1 OR u.email ILIKE $1)`;
-}
-params.push(limit, offset);
-    const { rows } = await query(
-      `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
-              l.view_count, l.interest_count, l.created_at,
-              COALESCE(l.sold_at, l.updated_at) AS sold_at,
-              l.sold_channel,
-              u.name AS seller_name, u.email AS seller_email,
-              u2.name AS buyer_name, u2.email AS buyer_email,
-              COALESCE((SELECT json_agg(p.url ORDER BY p.sort_order LIMIT 1) FROM listing_photos p WHERE p.listing_id=l.id),'[]'::json) AS photos
-       FROM listings l
-       JOIN users u ON u.id=l.seller_id
-       LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
-       ${where}
-       ORDER BY COALESCE(l.sold_at, l.updated_at) DESC
-       LIMIT $${params.length-1} OFFSET $${params.length}`,
+  try {
+    // Check if user is admin
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    
+    const { q, page=1, limit=50 } = req.query;
+    const offset = (parseInt(page)-1)*parseInt(limit);
+    const limitInt = parseInt(limit);
+    const offsetInt = parseInt(offset);
+    const params = [];
+    let where = "WHERE l.status='sold'";
+    
+    if (q) {
+      params.push(`%${q}%`);
+      where += ` AND (l.title ILIKE $1 OR u.name ILIKE $1 OR u.email ILIKE $1)`;
+    }
+    
+    // Get total count
+    const { rows: cnt } = await query(
+      `SELECT COUNT(*) FROM listings l 
+       JOIN users u ON u.id=l.seller_id 
+       LEFT JOIN users u2 ON u2.id=l.locked_buyer_id ${where}`,
       params
     );
-    const { rows: cnt } = await query(
-      `SELECT COUNT(*) FROM listings l JOIN users u ON u.id=l.seller_id LEFT JOIN users u2 ON u2.id=l.locked_buyer_id ${where}`,
-      params.slice(0,-2)
+    
+    // Get sold listings - add limit and offset to params
+    params.push(limitInt, offsetInt);
+    const param1 = params.length - 1; // index for limit
+    const param2 = params.length;     // index for offset
+    
+    const { rows } = await query(
+      `SELECT l.id, l.title, l.category, l.price, l.location, l.county, l.status,
+      l.view_count, l.interest_count, l.created_at,
+      COALESCE(l.sold_at, l.updated_at) AS sold_at,
+      l.sold_channel,
+      u.name AS seller_name, u.email AS seller_email,
+      u2.name AS buyer_name, u2.email AS buyer_email,
+      COALESCE((SELECT json_agg(p.url) FROM (SELECT url FROM listing_photos WHERE listing_id=l.id ORDER BY sort_order LIMIT 1) p),'[]'::json) AS photos
+      FROM listings l
+      JOIN users u ON u.id=l.seller_id
+      LEFT JOIN users u2 ON u2.id=l.locked_buyer_id
+      ${where}
+      ORDER BY COALESCE(l.sold_at, l.updated_at) DESC
+      LIMIT $${param1} OFFSET $${param2}`,
+      params
     );
+    
     res.json({ listings: rows, total: parseInt(cnt[0].count) });
   } catch (err) { next(err); }
 });
@@ -604,35 +641,23 @@ router.post("/:id/save", requireAuth, async (req, res, next) => {
 // Uses SELECT FOR UPDATE to prevent race conditions when multiple buyers try to lock in
 router.post("/:id/lock-in", requireAuth, async (req, res, next) => {
   try {
-    if (req.user.id === req.params.id) return res.status(400).json({ error: "Cannot lock in on your own listing" });
-
-    const result = await withLockInTransaction(req.params.id, async (listing, client) => {
-      if (listing.seller_id === req.user.id) {
-        throw new ConcurrencyError("Cannot lock in on your own listing", "OWN_LISTING");
-      }
-      if (listing.locked_buyer_id) {
-        throw new ConcurrencyError("Another buyer has already locked in", "ALREADY_LOCKED");
-      }
-
-      await client.query(
-        `UPDATE listings SET locked_buyer_id=$1,locked_at=NOW(),status='locked',interest_count=interest_count+1,version=version+1 WHERE id=$2`,
-        [req.user.id, req.params.id]
-      );
-
-      await client.query(
-        `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'buyer_locked_in','A buyer has locked in!',$2,$3)`,
-        [listing.seller_id,       `A serious buyer locked in on "${listing.title}". Pay KSh 260 to reveal their contact.`, JSON.stringify({ listing_id: req.params.id })]
-      );
-
-      return listing;
-    });
-
+    const { rows } = await query(`SELECT l.*, u.email AS seller_email, u.name AS seller_name FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND l.status='active'`, [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "Listing not found or no longer active" });
+    const listing = rows[0];
+    if (listing.seller_id === req.user.id) return res.status(400).json({ error: "Cannot lock in on your own listing" });
+    if (listing.locked_buyer_id) return res.status(409).json({ error: "Another buyer has already locked in" });
+    await query(`UPDATE listings SET locked_buyer_id=$1,locked_at=NOW(),status='locked',interest_count=interest_count+1 WHERE id=$2`, [req.user.id, req.params.id]);
+    await query(
+      `INSERT INTO notifications (user_id,type,title,body,data) VALUES ($1,'buyer_locked_in','A buyer has locked in!',$2,$3)`,
+      [listing.seller_id, `A serious buyer locked in on "${listing.title}". Pay KSh 260 to reveal their contact.`, JSON.stringify({ listing_id: req.params.id })]
+    );
+    // Email the seller immediately — they may not be on the platform
     const { sendEmail } = require("../services/email.service");
     sendEmail(
-      result.seller_email,
-      result.seller_name,
-      `A serious buyer wants your "${result.title}"`,
-      `Good news! A serious buyer just locked in on your listing "<strong>${result.title}</strong>".<br><br>Pay <strong>KSh 260</strong> to reveal their contact details and close the deal.<br><br><a href="https://weka-soko-nextjs.vercel.app/dashboard">Go to your dashboard →</a>`
+      listing.seller_email,
+      listing.seller_name,
+      `A serious buyer wants your "${listing.title}"`,
+      `Good news! A serious buyer just locked in on your listing "<strong>${listing.title}</strong>".<br><br>Pay <strong>KSh 260</strong> to reveal their contact details and close the deal.<br><br><a href="https://weka-soko-nextjs.vercel.app/dashboard">Go to your dashboard →</a>`
     ).catch(() => {});
 
     res.json({ message: "Locked in. Seller has been notified." });
@@ -718,6 +743,50 @@ router.post("/:id/seed-photos", requireAuth, requireSeller, async (req, res, nex
       );
     }
     res.json({ ok: true, inserted: urls.length });
+  } catch (err) { next(err); }
+});
+
+// Helper function for Cloudinary resize
+function getResizedImageUrl(url, size = 'medium') {
+  if (!url) return null;
+  if (url.includes('cloudinary.com')) {
+    const sizes = {
+      thumb: 'w_400,h_400,c_fill,q_auto',
+      medium: 'w_800,h_600,c_fill,q_auto',
+      full: 'w_1200,q_auto'
+    };
+    return url.replace('/upload/', `/upload/${sizes[size]}/`);
+  }
+  return url;
+}
+
+// ── GET /api/listings/mobile-feed ────────────────────────────────────────────
+// Optimized for mobile: minimal data, smaller images, pagination
+router.get("/mobile-feed", async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
+    const { rows } = await query(
+      `SELECT l.id, l.title, l.price, l.location, l.county, l.category, l.status, l.created_at, l.interest_count,
+        CASE WHEN ARRAY_LENGTH(l.photos, 1) > 0 THEN l.photos[1] ELSE NULL END as thumbnail,
+        u.name as seller_name
+       FROM listings l
+       JOIN users u ON l.seller_id = u.id
+       WHERE l.status = 'active' AND l.expires_at > NOW()
+       ORDER BY l.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    // Add resized image URLs
+    const listings = rows.map(row => ({
+      ...row,
+      thumbnail: row.thumbnail ? getResizedImageUrl(row.thumbnail, 'thumb') : null
+    }));
+
+    res.json({ listings, page, hasMore: rows.length === limit });
   } catch (err) { next(err); }
 });
 

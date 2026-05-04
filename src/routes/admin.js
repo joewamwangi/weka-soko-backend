@@ -774,11 +774,49 @@ router.patch("/requests/:id/status", async (req, res, next) => {
     const { status } = req.body;
     const validStatuses = ["active","closed","archived","expired","pending_review","rejected"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Invalid status" });
+    
+    // Get request details before update
+    const { rows: beforeRows } = await query(
+      `SELECT r.id, r.title, r.status, r.user_id, u.email, u.name
+       FROM buyer_requests r JOIN users u ON u.id=r.user_id WHERE r.id=$1`,
+      [req.params.id]
+    );
+    if (!beforeRows.length) return res.status(404).json({ error: "Request not found" });
+    const prevStatus = beforeRows[0].status;
+    
     const { rows } = await query(
       `UPDATE buyer_requests SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id,title,status`,
       [status, req.params.id]
     );
-    if (!rows.length) return res.status(404).json({ error: "Request not found" });
+    
+    // Notify user when request is approved (active) or rejected
+    if (prevStatus !== status) {
+      const request = beforeRows[0];
+      if (status === "active") {
+        // Approved - notify user
+        await query(
+          `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1,'request_approved','Request Approved',$2,$3)`,
+          [request.user_id, `Your buyer request "${request.title}" has been approved and is now live.`, JSON.stringify({ request_id: request.id })]
+        );
+        pushNotification(request.user_id, {
+          type: "request_approved",
+          title: "Request Approved",
+          body: `Your buyer request "${request.title}" is now live.`,
+        });
+      } else if (status === "rejected") {
+        // Rejected - notify user
+        await query(
+          `INSERT INTO notifications (user_id, type, title, body, data) VALUES ($1,'request_rejected','Request Not Approved',$2,$3)`,
+          [request.user_id, `Your buyer request "${request.title}" was not approved. Please review our guidelines.`, JSON.stringify({ request_id: request.id })]
+        );
+        pushNotification(request.user_id, {
+          type: "request_rejected",
+          title: "Request Not Approved",
+          body: `Your buyer request "${request.title}" was not approved.`,
+        });
+      }
+    }
+    
     res.json({ ok: true, request: rows[0] });
   } catch (err) { next(err); }
 });
@@ -1018,18 +1056,38 @@ router.post("/invite", async (req, res, next) => {
     const ADMIN_URL = process.env.ADMIN_URL || "https://weka-soko-admin.vercel.app";
     let userId;
     if (existing.rows.length) {
-      await query(`UPDATE users SET role='admin', admin_level=$1, name=COALESCE(NULLIF(name,''),$2), is_verified=TRUE WHERE id=$3`, [admin_level, name, existing.rows[0].id]);
+      // Update existing user to admin AND set new password
+      await query(`UPDATE users SET role='admin', admin_level=$1, password_hash=$2, name=COALESCE(NULLIF(name,''),$3), is_verified=TRUE WHERE id=$4`, [admin_level, hash, name, existing.rows[0].id]);
       userId = existing.rows[0].id;
     } else {
       const { rows } = await query(`INSERT INTO users (name, email, password_hash, role, admin_level, is_verified, anon_tag) VALUES ($1,$2,$3,'admin',$4,TRUE,$5) RETURNING id`, [name, email.toLowerCase().trim(), hash, admin_level, anonTag]);
       userId = rows[0].id;
     }
     const { sendEmail } = require("../services/email.service");
-    await sendEmail(email, name, "You have been invited to Weka Soko Admin",
-      `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
-    );
-    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level }, ip: req.ip });
-    res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
+    
+    // Check email config before sending
+    if (!process.env.SENDGRID_API_KEY) {
+      console.error("[Admin Invite] SENDGRID_API_KEY not set - cannot send email");
+      return res.status(500).json({ error: "Email service not configured. Contact support." });
+    }
+    if (!process.env.EMAIL_FROM) {
+      console.error("[Admin Invite] EMAIL_FROM not set - cannot send email");
+      return res.status(500).json({ error: "Email service not configured. Contact support." });
+    }
+    
+    try {
+      await sendEmail(email, name, "You have been invited to Weka Soko Admin",
+        `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
+      );
+      console.log(`[Admin Invite] Email sent successfully to ${email}`);
+      await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level }, ip: req.ip });
+      res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
+    } catch (emailErr) {
+      console.error("[Admin Invite] Failed to send email:", emailErr.message);
+      // Email failed but user was created - still return success with warning
+      await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level, email_error: emailErr.message }, ip: req.ip });
+      res.json({ ok: true, warning: "User created but email failed to send", userId });
+    }
   } catch (err) { console.error("[Admin invite]", err.message); next(err); }
 });
 
@@ -1092,7 +1150,7 @@ router.post("/moderation/:id/approve", async (req, res, next) => {
     const io = req.app?.get("io");
     if (io) {
       // Notify the seller their ad is live
-      io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "🎉 Ad Approved!", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
+      io.to(`user:${listing.seller_id}`).emit("notification", { type: "listing_approved", title: "Ad Approved", body: `Your listing "${listing.title}" is now live!`, data: { listing_id: id } });
       // Global feed refresh — sends the full listing object to all connected users
       query(
         `SELECT l.id, l.title, l.description, l.category, l.subcat, l.price, l.location, l.county,
@@ -1426,12 +1484,12 @@ router.post("/broadcast", requireAuth, requireAdmin, async (req, res, next) => {
 
 // ── POST /api/admin/listings/:id/discount ──────────────────────────────────────
 // Grant a flat KSh discount on the unlock fee for a specific listing.
-// discount_amount = 0-250 (250 = free unlock). Seller is notified immediately.
+// discount_amount = 0-260 (250 = free unlock). Seller is notified immediately.
 router.post("/listings/:id/discount", requireAdmin, async (req, res, next) => {
   try {
     const { id } = req.params;
     const discount = parseInt(req.body.discount_amount);
-    const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "250");
+    const UNLOCK_FEE = parseInt(process.env.UNLOCK_FEE_KES || "260");
     if (isNaN(discount) || discount < 0 || discount > UNLOCK_FEE)
       return res.status(400).json({ error: `discount_amount must be between 0 and ${UNLOCK_FEE}` });
 

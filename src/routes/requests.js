@@ -67,26 +67,76 @@ router.post("/", requireAuth, async (req, res, next) => {
     if (!title || !description) return res.status(400).json({ error: "Title and description are required" });
     if (title.length > 120) return res.status(400).json({ error: "Title too long (max 120 chars)" });
 
-    // Contact info scan
-    for (const [field, val] of [["title", title], ["description", description]]) {
-      if (val) {
-        const r = detectContactInfo(val);
-        if (r.blocked) return res.status(422).json({ error: `"${field}" contains contact info (${r.reason}). Remove it to proceed.` });
-      }
+    // Contact info scan - only scan title, not description (too many false positives)
+    const titleScan = detectContactInfo(title);
+    if (titleScan.blocked) {
+      return res.status(422).json({ error: `"title" contains contact info (${titleScan.reason}). Remove it to proceed.` });
     }
 
     const { rows } = await query(
       `INSERT INTO buyer_requests
-         (user_id, title, description, budget, county, category, subcat, keywords, min_price, max_price, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review') RETURNING *`,
+      (user_id, title, description, budget, county, category, subcat, keywords, min_price, max_price, status)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review') RETURNING *`,
       [req.user.id, title.trim(), description.trim(),
-       budget ? parseFloat(budget) : null, county || null,
-       category || null, subcat || null, keywords || null,
-       min_price ? parseFloat(min_price) : null,
-       max_price ? parseFloat(max_price) : null]
+      budget ? parseFloat(budget) : null, county || null,
+      category || null, subcat || null, keywords || null,
+      min_price ? parseFloat(min_price) : null,
+      max_price ? parseFloat(max_price) : null]
     );
     const request = rows[0];
-    res.status(201).json({ ...request, message: "Your request has been submitted and is pending review. It will go live once approved." });
+    
+    // Notify admins of new request awaiting approval
+    await query(
+      `INSERT INTO notifications (user_id, type, title, body, data)
+       SELECT id, 'request_pending', 'New Buyer Request Pending Approval',
+       $1, $2 FROM users WHERE role = 'admin'`,
+      [`"${title.trim()}" — A new buyer request is awaiting your approval.`,
+       JSON.stringify({ request_id: request.id, title: title.trim() })]
+    ).catch(() => {});
+    
+    res.status(201).json({ ...request, message: "Request submitted for review. You'll be notified when it's approved." });
+
+    // Async: find active sellers whose listings match this new request — notify them
+    (async () => {
+      try {
+        const priceFilter = [];
+        const priceParams = [req.user.id, title.trim()];
+        if (budget) { priceParams.push(parseFloat(budget)); priceFilter.push(`l.price <= $${priceParams.length}`); }
+        if (category) { priceParams.push(category); priceFilter.push(`l.category ILIKE $${priceParams.length}`); }
+
+        const { rows: matches } = await query(
+          `SELECT DISTINCT l.seller_id, l.id AS listing_id, l.title AS listing_title, u.anon_tag
+           FROM listings l JOIN users u ON u.id = l.seller_id
+           WHERE l.status = 'active'
+             AND l.seller_id != $1
+             AND (l.title ILIKE '%'||$2||'%' OR l.description ILIKE '%'||$2||'%'
+                  OR $2 ILIKE '%'||l.title||'%')
+             ${priceFilter.length ? 'AND ' + priceFilter.join(' AND ') : ''}
+           LIMIT 20`,
+          priceParams
+        );
+
+        const io = global._io;
+        for (const m of matches) {
+          await query(
+            `INSERT INTO notifications (user_id,type,title,body,data)
+             VALUES ($1,'listing_match','A buyer wants what you have!',$2,$3)
+             ON CONFLICT DO NOTHING`,
+            [m.seller_id,
+             `A buyer is looking for "${title.trim()}"${budget ? ` — budget KSh ${parseFloat(budget).toLocaleString()}` : ""}. You may have what they need!`,
+             JSON.stringify({ request_id: request.id, listing_id: m.listing_id })]
+          ).catch(() => {});
+          if (io) {
+            io.to(`user:${m.seller_id}`).emit("notification", {
+              type: "listing_match",
+              title: "A buyer wants what you have!",
+              body: `Someone is looking for "${title.trim()}"${budget ? ` — budget KSh ${parseFloat(budget).toLocaleString()}` : ""}`,
+              data: { request_id: request.id }
+            });
+          }
+        }
+      } catch (e) { /* non-critical */ }
+    })();
   } catch (err) { next(err); }
 });
 
