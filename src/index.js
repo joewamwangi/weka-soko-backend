@@ -471,6 +471,16 @@ app.get("/health", async (req, res) => {
   }
 });
 
+// Health check alias for /api/health (used by admin panel)
+app.get("/api/health", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok", db: "connected", version: "1.0.0", platform: "Weka Soko" });
+  } catch {
+    res.status(500).json({ status: "error", db: "disconnected" });
+  }
+});
+
 // ── Global Error Handler ───────────────────────────────────────────────────────
 const { errorHandler } = require("./middleware/errorHandler");
 app.use(errorHandler);
