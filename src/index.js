@@ -509,4 +509,25 @@ runMigration().then(() => {
   process.exit(1);
 });
 
+// ── Error Handling & Crash Prevention ───────────────────────────────────────
+// Prevent crashes from unhandled errors
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err.message);
+  console.error(err.stack);
+  // Don't exit - just log it and continue
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - just log it and continue
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  pool.end(() => {
+    process.exit(0);
+  });
+});
+
 module.exports = { app, server };
