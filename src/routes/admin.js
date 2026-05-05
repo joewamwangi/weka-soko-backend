@@ -1065,38 +1065,36 @@ router.post("/invite", async (req, res, next) => {
     }
 const { sendEmail } = require("../services/email.service");
 
-  // Create admin user first (always succeeds)
+  // Log the invite action
   await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "admin_invite", targetType: "user", targetId: userId, details: { email, name, admin_level }, ip: req.ip });
 
-  // Try to send email, but don't fail if email service is not configured
+  // Try to send invite email (optional - admin is created even if email fails)
+  let emailSent = false;
   try {
     await sendEmail(email, name, "You have been invited to Weka Soko Admin",
       `Hi ${name},\n\nYou have been invited to manage the Weka Soko admin panel with ${admin_level} access.\n\nLogin at: ${ADMIN_URL}\nEmail: ${email}\nTemporary password: ${tempPassword}\n\nPlease change your password after first login.\n\nAccess level: ${admin_level}\n— Weka Soko`
     );
     console.log(`[Admin Invite] Email sent successfully to ${email}`);
-    res.json({ ok: true, message: `Admin invite sent to ${email} with ${admin_level} access.`, userId });
+    emailSent = true;
   } catch (emailErr) {
-    console.warn("[Admin Invite] Email not sent (service not configured):", emailErr.message);
-    console.warn(`[Admin Invite] User created: ${email} (${name}) with ${admin_level} access`);
-    console.warn(`[Admin Invite] Please manually share credentials with the user.`);
-    // User was created successfully, just email failed
-    res.json({ 
-      ok: true, 
-      message: `Admin user created: ${email} with ${admin_level} access.`,
-      warning: "Email service not configured. Please share credentials manually.",
-      userId,
-      credentials: {
-        email: email,
-        temporaryPassword: tempPassword,
-        adminLevel: admin_level,
-        loginUrl: ADMIN_URL
-      }
-    });
+    console.warn("[Admin Invite] Email not sent:", emailErr.message);
   }
-    if (!process.env.EMAIL_FROM) {
-      console.error("[Admin Invite] EMAIL_FROM not set - cannot send email");
-      return res.status(500).json({ error: "Email service not configured. Contact support." });
+
+  // Always return success with credentials (works even without email)
+  res.json({
+    ok: true,
+    message: emailSent 
+      ? `Admin invite sent to ${email} with ${admin_level} access.`
+      : `Admin user created: ${email} with ${admin_level} access.`,
+    userId,
+    emailSent,
+    credentials: {
+      email: email,
+      temporaryPassword: tempPassword,
+      adminLevel: admin_level,
+      loginUrl: ADMIN_URL
     }
+  });
     
     try {
       await sendEmail(email, name, "You have been invited to Weka Soko Admin",
