@@ -15,7 +15,7 @@ if (!PAYSTACK_SECRET) {
  * Initialize a Paystack transaction
  * @param {Object} params - Transaction parameters
  * @param {string} params.email - Customer email
- * @param {number} params.amount - Amount in KES (will be converted to cents)
+ * @param {number} params.amount - Amount in KES (KES doesn't use cents - sent as-is)
  * @param {string} params.phone - Customer phone number
  * @param {string} params.reference - Unique reference (e.g., WS-UNLOCK-xxx)
  * @param {string} params.description - Payment description
@@ -25,12 +25,12 @@ if (!PAYSTACK_SECRET) {
 async function initializeTransaction({ email, amount, phone, reference, description, metadata = {} }) {
   try {
     console.log('[Paystack] Initializing transaction:', { email, amount, reference, description });
-    
+
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
       {
         email,
-        amount: Math.round(amount * 100), // Convert to cents/smallest currency unit
+        amount: Math.round(amount), // KES doesn't use cents - amount is already in shillings
         currency: 'KES',
         reference,
         callback_url: process.env.PAYSTACK_CALLBACK_URL || `${process.env.FRONTEND_URL}/payment/callback`,
