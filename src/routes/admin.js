@@ -661,6 +661,16 @@ router.patch("/vouchers/:id/toggle", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── DELETE /api/admin/vouchers/:id ────────────────────────────────────────────
+router.delete("/vouchers/:id", async (req, res, next) => {
+  try {
+    const { rows } = await query(`DELETE FROM vouchers WHERE id=$1 RETURNING *`, [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: "Voucher not found" });
+    await auditLog({ adminId: req.user.id, adminEmail: req.user.email, action: "voucher_delete", targetType: "voucher", targetId: req.params.id, details: { code: rows[0].code }, ip: req.ip });
+    res.json({ success: true, code: rows[0].code });
+  } catch (err) { next(err); }
+});
+
 // ── GET /api/admin/requests ───────────────────────────────────────────────────
 router.get("/requests", async (req, res, next) => {
 try {
