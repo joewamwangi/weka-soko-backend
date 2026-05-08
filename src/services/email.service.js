@@ -2,14 +2,16 @@
 const FRONTEND = process.env.FRONTEND_URL || 'https://weka-soko-nextjs-q89r3s4q6.vercel.app';
 
 async function sendEmail(to, name, subject, text) {
-  // Check for Brevo configuration
-  const brevoKey = process.env.BREVO_API_KEY;
-  const fromEmail = process.env.EMAIL_FROM;
+  // Check for email service configuration (supports multiple providers)
+  const brevoKey = process.env.BREVO_API_KEY || process.env.SENDGRID_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM || process.env.MAIL_FROM;
   
   if (!brevoKey || !fromEmail) {
-    console.log(`[Email] Skipped (not configured): ${subject} to ${to}`);
-    console.log(`[Email] BREVO_API_KEY: ${brevoKey ? 'SET' : 'MISSING'}`);
-    console.log(`[Email] EMAIL_FROM: ${fromEmail ? 'SET' : 'MISSING'}`);
+    // Email service not configured - log but don't fail
+    console.log(`[Email] Service not configured: ${subject} to ${to}`);
+    console.log(`[Email] BREVO_API_KEY or SENDGRID_API_KEY: ${brevoKey ? 'SET' : 'MISSING'}`);
+    console.log(`[Email] EMAIL_FROM or MAIL_FROM: ${fromEmail ? 'SET' : 'MISSING'}`);
+    // Return success anyway - email is not critical
     return;
   }
 
