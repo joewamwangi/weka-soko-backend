@@ -11,8 +11,15 @@ const { recordFailedAttempt, clearFailedAttempts } = require("../middleware/secu
 
 const router = express.Router();
 
-const FRONTEND = process.env.FRONTEND_URL || "https://weka-soko.vercel.app";
+const FRONTEND = process.env.FRONTEND_URL || "https://weka-soko-nextjs.vercel.app";
 const ADMIN_URL = process.env.ADMIN_URL || "https://weka-soko-admin.vercel.app";
+// Backend URL for Render - use environment variable or construct from available info
+const getBackendUrl = () => {
+  if (process.env.BACKEND_URL) return process.env.BACKEND_URL;
+  if (process.env.RENDER_EXTERNAL_HOST) return `https://${process.env.RENDER_EXTERNAL_HOST}`;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  return "";
+};
 
 // ── Anon tag generator ──────────────────────────────────────────────────────
 const ANON_ADJ  = ["Swift","Bold","Sharp","Bright","Keen","Wise","Calm","Fierce","Sleek","Prime","Epic","Fresh","Solid","Grand","Noble","Elite","Savvy","Agile","Brave","Deft"];
@@ -558,7 +565,7 @@ return res.status(400).json({ error: "Password must contain uppercase, lowercase
 
 // ── Google OAuth ────────────────────────────────────────────────────────────
 router.get("/google", (req, res) => {
- const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "";
+ const backendUrl = process.env.BACKEND_URL || `https://${process.env.RENDER_EXTERNAL_HOST || process.env.RAILWAY_PUBLIC_DOMAIN}` || "";
  if (!process.env.GOOGLE_CLIENT_ID) {
  return res.status(500).json({ error: "Google OAuth not configured. Please set GOOGLE_CLIENT_ID." });
  }
