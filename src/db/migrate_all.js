@@ -3,9 +3,16 @@ const { pool } = require("./pool");
 const crypto = require("crypto");
 
 async function runMigration() {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+const client = await pool.connect();
+try {
+// Check if migration already ran
+const { rows } = await client.query(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users' AND table_schema = 'public')`);
+if (rows[0]?.exists) {
+console.log("✅ Database schema already exists - skipping migration");
+return;
+}
+
+await client.query("BEGIN");
 
     // ── Extensions ───────────────────────────────────────────────────────────
     await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
