@@ -455,6 +455,10 @@ app.use("/api/requests", requestRoutes);
 app.use("/api/pitches", pitchRoutes);
 app.use("/api/push", pushRoutes);
 
+// Agents route
+const agentsRoutes = require("./routes/agents");
+app.use("/api/agents", agentsRoutes);
+
 // New routes for short-term fixes
 const moderationAppealRoutes = require("./routes/moderation-appeal");
 const refundRoutes = require("./routes/refunds");
