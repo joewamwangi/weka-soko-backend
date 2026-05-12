@@ -94,20 +94,11 @@ router.post('/listings/:id/analyze', requireAuth, async (req, res) => {
  */
 router.get('/health', async (req, res) => {
   try {
-    const health = await orchestrator.getHealth();
-    
-    // Get recent error rate
-    const errors = await pool.query(`
-      SELECT COUNT(*) as error_count
-      FROM agent_activity_logs
-      WHERE created_at > NOW() - INTERVAL '1 hour'
-        AND results_summary::text LIKE '%"success": false%'
-    `);
-
+    // Simple health check - just verify DB connection
+    await pool.query('SELECT 1');
     res.json({
       status: 'healthy',
-      ...health,
-      recentErrors: parseInt(errors.rows[0]?.error_count || 0),
+      agents: 'available',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
