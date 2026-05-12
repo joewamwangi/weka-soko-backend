@@ -459,9 +459,7 @@ app.use("/api/push", pushRoutes);
 const agentsRoutes = require("./routes/agents");
 app.use("/api/agents", agentsRoutes);
 
-// Migration routes (one-time use)
-const migrateSchemaRoutes = require("./routes/migrate-schema");
-app.use("/api/migrate-schema", migrateSchemaRoutes);
+// Fix schema route (one-time use)
 const fixSchemaRoutes = require("./routes/fix-schema");
 app.use("/api/fix-schema", fixSchemaRoutes);
 
