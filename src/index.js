@@ -459,9 +459,11 @@ app.use("/api/push", pushRoutes);
 const agentsRoutes = require("./routes/agents");
 app.use("/api/agents", agentsRoutes);
 
-// Migration route (one-time use)
+// Migration routes (one-time use)
 const migrateSchemaRoutes = require("./routes/migrate-schema");
 app.use("/api/migrate-schema", migrateSchemaRoutes);
+const fixSchemaRoutes = require("./routes/fix-schema");
+app.use("/api/fix-schema", fixSchemaRoutes);
 
 // New routes for short-term fixes
 const moderationAppealRoutes = require("./routes/moderation-appeal");
