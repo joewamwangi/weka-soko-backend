@@ -22,7 +22,19 @@ const { scanListingForContact } = require("../services/moderation.service");
 const { uploadBuffer } = require("../services/cloudinary.service");
 const { safeListingUpdate, withLockInTransaction, ConcurrencyError } = require("../services/concurrency.service");
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024, files: 8 } });
+// ── File upload configuration with security ───────────────────────────────────
+const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILES = 8;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE, files: MAX_FILES },
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_TYPES.includes(file.mimetype)) return cb(null, true);
+    cb(new Error(`Invalid file type: ${file.mimetype}. Allowed: ${ALLOWED_TYPES.join(", ")}`), false);
+  },
+});
 
 // ── GET /api/listings/categories ──────────────────────────────────────────────
 // Categories for mobile app
@@ -77,7 +89,10 @@ if (category) { params.push(category); conditions.push(`l.category ILIKE $${para
     }
     if (location && !search) { params.push(`%${location}%`); conditions.push(`(l.location ILIKE $${params.length} OR l.county ILIKE $${params.length})`); }
     const sortMap = { newest:"l.created_at DESC", oldest:"l.created_at ASC", price_asc:"l.price ASC", price_desc:"l.price DESC", popular:"l.view_count DESC", expiring:"l.expires_at ASC" };
-    const orderBy = search ? "rank DESC, l.created_at DESC" : (sortMap[sort]||"l.created_at DESC");
+    if (!sortMap[sort]) {
+      return res.status(400).json({ error: "Invalid sort parameter" });
+    }
+    const orderBy = search ? "rank DESC, l.created_at DESC" : sortMap[sort];
     const where = "WHERE " + conditions.join(" AND ");
     params.push(parseInt(limit), offset);
     const sql = `
@@ -386,8 +401,16 @@ router.get("/buyer/saved/ids", requireAuth, async (req, res, next) => {
 });
 
 // ── GET /api/listings/:id ─────────────────────────────────────────────────────
+// Validate and sanitize listing ID to prevent injection
+const validateListingId = (id) => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return id && uuidRegex.test(id);
+};
 router.get("/:id", optionalAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid listing ID format" });
+    }
     const { rows } = await query(
       `SELECT l.id, l.title, l.description, l.reason_for_sale, l.category, l.subcat,
               l.price, l.location, l.county, l.status,
@@ -493,6 +516,9 @@ router.patch("/:id", requireAuth, upload.array("photos", 8), async (req, res, ne
 // Uses optimistic locking to prevent concurrent deletions
 router.delete("/:id", requireAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid listing ID format" });
+    }
     const { version } = req.body;
     const { rows } = await query(`SELECT seller_id, version FROM listings WHERE id=$1`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "Not found" });
@@ -525,6 +551,9 @@ router.delete("/:id", requireAuth, async (req, res, next) => {
 // Uses optimistic locking to prevent race conditions
 router.post("/:id/mark-sold", requireAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid listing ID format" });
+    }
     const { channel, version } = req.body;
     if (!["platform", "outside"].includes(channel)) {
       return res.status(400).json({ error: "channel must be 'platform' or 'outside'" });
@@ -585,6 +614,9 @@ router.post("/:id/mark-sold", requireAuth, async (req, res, next) => {
 // Uses transaction with conflict detection for race condition protection
 router.post("/:id/save", requireAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid listing ID format" });
+    }
     const result = await withTransaction(async (client) => {
       const { rows } = await client.query(
         `SELECT id FROM saved_listings WHERE user_id=$1 AND listing_id=$2 FOR UPDATE`,
@@ -641,6 +673,9 @@ router.post("/:id/save", requireAuth, async (req, res, next) => {
 // Uses SELECT FOR UPDATE to prevent race conditions when multiple buyers try to lock in
 router.post("/:id/lock-in", requireAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid listing ID format" });
+    }
     const { rows } = await query(`SELECT l.*, u.email AS seller_email, u.name AS seller_name FROM listings l JOIN users u ON u.id=l.seller_id WHERE l.id=$1 AND l.status='active'`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "Listing not found or no longer active" });
     const listing = rows[0];
@@ -672,6 +707,9 @@ router.post("/:id/lock-in", requireAuth, async (req, res, next) => {
 // ── POST /api/listings/:id/report ─────────────────────────────────────────────
 router.post("/:id/report", requireAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid listing ID format" });
+    }
     const { reason, details } = req.body;
     const validReasons = ["scam","fake_item","wrong_price","offensive","spam","wrong_category","already_sold","other"];
     if (!reason || !validReasons.includes(reason)) return res.status(400).json({ error: "Valid reason required", validReasons });
@@ -696,6 +734,7 @@ router.post("/:id/report", requireAuth, async (req, res, next) => {
 // ── DELETE /api/listings/:id/photos/:photoId ──────────────────────────────────
 router.delete("/:id/photos/:photoId", requireAuth, async (req, res, next) => {
   try {
+    if (!validateListingId(req.params.id)) return res.status(400).json({ error: "Invalid listing ID format" });
     const { rows: ls } = await query(`SELECT seller_id FROM listings WHERE id=$1`, [req.params.id]);
     if (!ls.length) return res.status(404).json({ error: "Listing not found" });
     if (ls[0].seller_id !== req.user.id && req.user.role !== "admin") return res.status(403).json({ error: "Not your listing" });

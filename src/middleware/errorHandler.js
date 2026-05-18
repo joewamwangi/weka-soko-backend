@@ -73,7 +73,6 @@ function errorHandler(err, req, res, next) {
       error: isProduction ? getSafeMessage(err.code) : err.message,
       code: err.code,
       status: err.status,
-      ...(isProduction ? {} : { stack: err.stack }),
     });
   }
 
@@ -132,7 +131,6 @@ function errorHandler(err, req, res, next) {
     error: isProduction ? 'Something went wrong' : err.message,
     code: ERROR_CODES.INTERNAL_ERROR,
     status: 500,
-    ...(isProduction ? {} : { stack: err.stack }),
   });
 }
 

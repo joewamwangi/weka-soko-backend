@@ -28,6 +28,7 @@ const pushRoutes = require("./routes/push");
 const { sendPushToUser } = require("./routes/push");
 const { maintenanceMiddleware } = require("./middleware/maintenance");
 const { createUserRateLimiter, createPaymentLimiter } = require("./middleware/userRateLimiter");
+const { createCsrfToken, validateCsrfToken, sameSiteStrict } = require("./middleware/csrf");
 const { cacheMiddleware } = require("./services/cache.service");
 
 // Initialize Redis caching
@@ -44,11 +45,23 @@ app.use(createUserRateLimiter());
 const io = new Server(server, {
   cors: {
     origin: function(origin, callback) {
-      if (!origin) return callback(null, true);
+      // Allow requests with no origin (e.g. native apps, curl) only in development
+      if (!origin) {
+        if (process.env.NODE_ENV === "development") return callback(null, true);
+        return callback(null, true); // mobile apps may send no origin
+      }
       const isVercel = /^https:\/\/weka-soko[^.]*\.vercel\.app$/.test(origin);
-      const allowed = [process.env.FRONTEND_URL, process.env.ADMIN_URL, "http://localhost:3000"].filter(Boolean);
-      if (isVercel || allowed.includes(origin)) callback(null, true);
-      else callback(null, true); // allow all for now
+      const allowed = [
+        process.env.FRONTEND_URL,
+        process.env.ADMIN_URL,
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://localhost:3000",
+        "https://localhost:3001"
+      ].filter(Boolean);
+      if (isVercel || allowed.includes(origin)) return callback(null, true);
+      console.warn(`[CORS] Rejected origin: ${origin}`);
+      return callback(new Error("Not allowed by CORS"), false);
     },
     methods: ["GET", "POST"],
     credentials: true,
@@ -58,7 +71,31 @@ const io = new Server(server, {
 const jwt = require("jsonwebtoken");
 const { detectContactInfo, getSeverity } = require("./services/moderation.service");
 
-// Socket auth + handler
+// ── Socket.io Security Middleware ──────────────────────────────────────────
+// Rate limiting per socket connection
+const socketConnections = new Map(); // userId -> { count, lastReset }
+const MAX_SOCKET_CONNECTIONS_PER_MINUTE = 10;
+
+function checkSocketRateLimit(userId) {
+  const now = Date.now();
+  const windowMs = 60 * 1000; // 1 minute
+  if (!socketConnections.has(userId)) {
+    socketConnections.set(userId, { count: 1, lastReset: now });
+    return { allowed: true };
+  }
+  const data = socketConnections.get(userId);
+  if (now - data.lastReset > windowMs) {
+    data.count = 1;
+    data.lastReset = now;
+    return { allowed: true };
+  }
+  data.count++;
+  if (data.count > MAX_SOCKET_CONNECTIONS_PER_MINUTE) {
+    return { allowed: false, retryAfter: Math.ceil((data.lastReset + windowMs - now) / 1000) };
+  }
+  return { allowed: true };
+}
+
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
@@ -70,6 +107,13 @@ io.use(async (socket, next) => {
     );
     if (!rows.length) return next(new Error("User not found"));
     if (rows[0].is_suspended) return next(new Error("Account suspended"));
+    
+    // Rate limit socket connections
+    const rateCheck = checkSocketRateLimit(rows[0].id);
+    if (!rateCheck.allowed) {
+      return next(new Error(`Rate limit exceeded. Try again in ${rateCheck.retryAfter}s`));
+    }
+    
     socket.user = rows[0];
     next();
   } catch {
@@ -85,11 +129,16 @@ io.on("connection", (socket) => {
   // Mark user online
   onlineUsers.set(socket.user.id, socket.id);
   query(`UPDATE users SET is_online = TRUE, last_seen = NOW() WHERE id = $1`, [socket.user.id]).catch(()=>{});
-  // Broadcast online status to everyone in their listing rooms (updated when they join)
+  // Broadcast online status only to authorized rooms
   socket.broadcast.emit("user_online", { userId: socket.user.id });
 
   socket.on("join_listing", async (listingId) => {
     try {
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!listingId || !uuidRegex.test(listingId)) {
+        return socket.emit("error", "Invalid listing ID format");
+      }
       const { rows } = await query(
         `SELECT seller_id, locked_buyer_id, is_unlocked, listing_anon_tag FROM listings WHERE id = $1`,
         [listingId]
@@ -142,9 +191,39 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Chat rate limiting per user
+  const userMessageRate = new Map(); // userId -> { count, lastReset }
+  const MAX_MSGS_PER_MIN = 30;
+  
   socket.on("send_message", async ({ listingId, body }) => {
     try {
       if (!body?.trim() || body.length > 2000) return;
+      
+      // Validate listingId format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!listingId || !uuidRegex.test(listingId)) {
+        return socket.emit("system_warning", { body: "Invalid listing ID", severity: "warning" });
+      }
+      
+      // Rate limit messages
+      const now = Date.now();
+      if (!userMessageRate.has(socket.user.id)) {
+        userMessageRate.set(socket.user.id, { count: 1, lastReset: now });
+      } else {
+        const uData = userMessageRate.get(socket.user.id);
+        if (now - uData.lastReset > 60 * 1000) {
+          uData.count = 1;
+          uData.lastReset = now;
+        } else {
+          uData.count++;
+          if (uData.count > MAX_MSGS_PER_MIN) {
+            return socket.emit("system_warning", { 
+              body: "You're sending messages too quickly. Please slow down." , 
+              severity: "warning" 
+            });
+          }
+        }
+      }
 
       const { rows: listingRows } = await query(
         `SELECT seller_id, locked_buyer_id, is_unlocked FROM listings WHERE id = $1`,
@@ -354,6 +433,17 @@ app.use(helmet({
     },
   },
   crossOriginEmbedderPolicy: false,
+  hsts: {
+    maxAge: 63072000, // 2 years
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: {
+    policy: "same-origin",
+  },
+  xFrameOptions: "DENY",
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  permissionsPolicy: "camera=(), microphone=(), geolocation=(self), payment=()",
 }));
 app.use((req, _res, next) => {
   if (req.query) {
@@ -381,19 +471,22 @@ app.use((req, _res, next) => {
 });
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
+    if (!origin) return callback(null, true); // Allow no-origin (mobile apps, curl)
+    const isVercel = /^https:\/\/weka-soko[^.]*\.vercel\.app$/.test(origin);
+    const isWekaSoko = /^https:\/\/(.*\.)?wekasoko\.co\.ke$/i.test(origin);
     const allowed = [
       process.env.FRONTEND_URL,
       process.env.ADMIN_URL,
       "http://localhost:3000",
       "http://localhost:3001",
+      "https://localhost:3000",
+      "https://localhost:3001"
     ].filter(Boolean);
-    const isVercel = /^https:\/\/weka-soko[^.]*\.vercel\.app$/.test(origin);
-    if (allowed.includes(origin) || isVercel) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Allow all origins for now — tighten after launch
+    if (isVercel || isWekaSoko || allowed.includes(origin)) {
+      return callback(null, true);
     }
+    console.warn(`[CORS] Blocked origin: ${origin}`);
+    return callback(new Error("Not allowed by CORS"), false);
   },
   credentials: true,
 }));
@@ -410,6 +503,35 @@ const globalLimiter = rateLimit({
   message: { error: "Too many requests. Please try again later." },
   skip: (req) => req.path === "/health",
 });
+
+// ── CSRF Middleware ─────────────────────────────────────────────────────────
+// Generate CSRF token for all requests
+const csrf = require("./middleware/csrf");
+// Apply CSRF token creation globally (for GET requests, others after body parser)
+app.use((req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") {
+    // Generate CSRF token for all state-changing requests
+    res.cookie("XSRF-TOKEN", require("crypto").randomBytes(32).toString("hex"), {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 24 * 60 * 60 * 1000
+    });
+  }
+  next();
+});
+
+// CSRF protection for non-GET routes
+// const { validateCsrfToken } = require("./middleware/csrf"); // Already imported at top
+app.use((req, res, next) => {
+  // Skip validation for: health, webhook endpoints, and auth login/register (no CSRF needed)
+  const skipPaths = ["/health", "/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/google", "/api/payments/paystack/webhook", "/api/payments/mpesa/callback"];
+  if (req.method === "GET" || skipPaths.some(p => req.path.startsWith(p))) {
+    return next();
+  }
+  validateCsrfToken(req, res, next);
+});
+
 // Slow down repeated auth failures
 const authSlowDown = rateLimit({
   windowMs: 15 * 60 * 1000,
