@@ -525,7 +525,7 @@ app.use((req, res, next) => {
 // const { validateCsrfToken } = require("./middleware/csrf"); // Already imported at top
 app.use((req, res, next) => {
   // Skip validation for: health, webhook endpoints, and auth login/register (no CSRF needed)
-  const skipPaths = ["/health", "/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/google", "/api/payments/paystack/webhook", "/api/payments/mpesa/callback"];
+  const skipPaths = ["/health", "/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/google", "/api/payments/paystack/webhook", "/api/payments/mpesa/callback", "/api/seed", "/api/fix-schema"];
   if (req.method === "GET" || skipPaths.some(p => req.path.startsWith(p))) {
     return next();
   }
