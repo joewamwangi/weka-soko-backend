@@ -429,7 +429,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
-      connectSrc: ["'self'", "https://wekasokobackend.up.railway.app"],
+      connectSrc: ["'self'", process.env.BACKEND_URL || "https://weka-soko-backend-production.up.railway.app", "https://wekasokobackend.up.railway.app"],
     },
   },
   crossOriginEmbedderPolicy: false,
