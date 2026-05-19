@@ -26,6 +26,15 @@ const addCol = async (tbl, col, def) => {
 
 // ── Always run these column additions ──────────────────────────────────────
 // USERS
+await addCol("users","anon_tag","VARCHAR(20)");
+await addCol("users","avatar_url","TEXT");
+await addCol("users","is_verified","BOOLEAN DEFAULT FALSE");
+await addCol("users","is_suspended","BOOLEAN DEFAULT FALSE");
+await addCol("users","violation_count","INT DEFAULT 0");
+await addCol("users","whatsapp_phone","VARCHAR(20)");
+await addCol("users","mpesa_phone","VARCHAR(20)");
+await addCol("users","bio","TEXT");
+await addCol("users","free_unlock_approved","BOOLEAN DEFAULT FALSE");
 await addCol("users","google_id","VARCHAR(100)");
 await addCol("users","last_seen","TIMESTAMPTZ");
 await addCol("users","is_online","BOOLEAN DEFAULT FALSE");
@@ -77,6 +86,7 @@ await addCol("escrows","payment_id","UUID REFERENCES payments(id) ON DELETE SET 
 await addCol("escrows","item_amount","NUMERIC(12,2)");
 await addCol("escrows","fee_amount","NUMERIC(12,2)");
 await addCol("escrows","total_amount","NUMERIC(12,2)");
+await addCol("escrows","buyer_confirmed","BOOLEAN DEFAULT FALSE");
 await addCol("escrows","buyer_confirmed_at","TIMESTAMPTZ");
 await addCol("escrows","version","INT DEFAULT 1");
 
