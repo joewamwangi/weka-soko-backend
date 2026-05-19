@@ -6,7 +6,7 @@ const bcrypt = require("bcrypt");
 
 const SEED_SECRET = process.env.SEED_SECRET || "weka-soko-seed-2026";
 
-router.post("/seed", async (req, res) => {
+router.get("/run", async (req, res) => {
   if (req.query.secret !== SEED_SECRET) {
     return res.status(403).json({ error: "Unauthorized" });
   }
