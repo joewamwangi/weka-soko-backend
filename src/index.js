@@ -585,6 +585,10 @@ app.use("/api/agents", agentsRoutes);
 const fixSchemaRoutes = require("./routes/fix-schema");
 app.use("/api/fix-schema", fixSchemaRoutes);
 
+// Temporary seed endpoint — remove after seeding
+const seedRoutes = require("./routes/seed");
+app.use("/api/seed", seedRoutes);
+
 // New routes for short-term fixes
 const moderationAppealRoutes = require("./routes/moderation-appeal");
 const refundRoutes = require("./routes/refunds");
