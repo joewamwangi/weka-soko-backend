@@ -5,13 +5,117 @@ const crypto = require("crypto");
 async function runMigration() {
 const client = await pool.connect();
 try {
-// Check if migration already ran
+// Check if tables already exist
 const { rows } = await client.query(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users' AND table_schema = 'public')`);
-if (rows[0]?.exists) {
-console.log("✅ Database schema already exists - skipping migration");
-return;
+const schemaExists = rows[0]?.exists;
+
+if (schemaExists) {
+  console.log("✅ Database schema exists — running column additions only");
+} else {
+  console.log("🆕 Fresh database — creating full schema");
 }
 
+// ── Safe column addition helper (always runs) ──────────────────────────────
+const addCol = async (tbl, col, def) => {
+  try {
+    await client.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS ${col} ${def}`);
+  } catch(e) {
+    // Ignore errors (column may already exist, table may not exist yet)
+  }
+};
+
+// ── Always run these column additions ──────────────────────────────────────
+// USERS
+await addCol("users","google_id","VARCHAR(100)");
+await addCol("users","last_seen","TIMESTAMPTZ");
+await addCol("users","is_online","BOOLEAN DEFAULT FALSE");
+await addCol("users","email_verify_token","VARCHAR(64)");
+await addCol("users","email_verify_expires","TIMESTAMPTZ");
+await addCol("users","response_rate","NUMERIC(5,2) DEFAULT NULL");
+await addCol("users","avg_response_hours","NUMERIC(6,2) DEFAULT NULL");
+await addCol("users","avg_rating","NUMERIC(3,2) DEFAULT NULL");
+await addCol("users","review_count","INT DEFAULT 0");
+await addCol("users","admin_level","VARCHAR(20) DEFAULT NULL");
+await addCol("users","account_status","VARCHAR(20) DEFAULT 'active'");
+await addCol("users","total_listings_posted","INT DEFAULT 0");
+await addCol("users","version","INT DEFAULT 1");
+
+// LISTINGS
+await addCol("listings","listing_anon_tag","VARCHAR(20)");
+await addCol("listings","unlocked_at","TIMESTAMPTZ");
+await addCol("listings","county","VARCHAR(60)");
+await addCol("listings","expires_at","TIMESTAMPTZ DEFAULT NOW() + INTERVAL '75 days'");
+await addCol("listings","expiry_warned","BOOLEAN DEFAULT FALSE");
+await addCol("listings","moderation_note","TEXT");
+await addCol("listings","reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
+await addCol("listings","reviewed_at","TIMESTAMPTZ");
+await addCol("listings","moderation_reviewed_at","TIMESTAMPTZ");
+await addCol("listings","moderation_reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
+await addCol("listings","is_contact_public","BOOLEAN DEFAULT FALSE");
+await addCol("listings","subcat","VARCHAR(80)");
+await addCol("listings","payment_expires_at","TIMESTAMPTZ");
+await addCol("listings","sold_at","TIMESTAMPTZ");
+await addCol("listings","sold_channel","VARCHAR(30)");
+await addCol("listings","precise_location","TEXT");
+await addCol("listings","unlock_discount","INT DEFAULT 0");
+await addCol("listings","version","INT DEFAULT 1");
+
+// PAYMENTS
+await addCol("payments","amount_kes","NUMERIC(12,2)");
+await addCol("payments","till_number","VARCHAR(20) DEFAULT '5673935'");
+await addCol("payments","voucher_code","VARCHAR(30)");
+await addCol("payments","type","VARCHAR(30)");
+await addCol("payments","mpesa_phone","VARCHAR(20)");
+await addCol("payments","mpesa_checkout_id","VARCHAR(100)");
+await addCol("payments","stk_push_sent_at","TIMESTAMPTZ");
+await addCol("payments","confirmed_at","TIMESTAMPTZ");
+await addCol("payments","pitch_id","UUID REFERENCES seller_pitches(id) ON DELETE SET NULL");
+await addCol("payments","version","INT DEFAULT 1");
+
+// ESCROWS
+await addCol("escrows","payment_id","UUID REFERENCES payments(id) ON DELETE SET NULL");
+await addCol("escrows","item_amount","NUMERIC(12,2)");
+await addCol("escrows","fee_amount","NUMERIC(12,2)");
+await addCol("escrows","total_amount","NUMERIC(12,2)");
+await addCol("escrows","buyer_confirmed_at","TIMESTAMPTZ");
+await addCol("escrows","version","INT DEFAULT 1");
+
+// DISPUTES
+await addCol("disputes","admin_alerted_at","TIMESTAMPTZ");
+
+// CHAT VIOLATIONS
+await addCol("chat_violations","reviewed","BOOLEAN DEFAULT FALSE");
+await addCol("chat_violations","reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
+await addCol("chat_violations","reviewed_at","TIMESTAMPTZ");
+
+// VOUCHERS
+await addCol("vouchers","active","BOOLEAN DEFAULT TRUE");
+await addCol("vouchers","discount_percent","INT DEFAULT 0");
+await addCol("vouchers","description","TEXT");
+await addCol("vouchers","version","INT DEFAULT 1");
+
+// REVIEWS
+await addCol("reviews","reviewee_id","UUID REFERENCES users(id) ON DELETE CASCADE");
+await addCol("reviews","version","INT DEFAULT 1");
+
+// BUYER REQUESTS
+await addCol("buyer_requests","user_id","UUID REFERENCES users(id) ON DELETE CASCADE");
+await addCol("buyer_requests","category","VARCHAR(80)");
+await addCol("buyer_requests","subcat","VARCHAR(80)");
+await addCol("buyer_requests","keywords","TEXT");
+await addCol("buyer_requests","min_price","NUMERIC(12,2)");
+await addCol("buyer_requests","max_price","NUMERIC(12,2)");
+await addCol("buyer_requests","photos","JSONB DEFAULT '[]'");
+await addCol("buyer_requests","approved_by","UUID REFERENCES users(id) ON DELETE SET NULL");
+await addCol("buyer_requests","approved_at","TIMESTAMPTZ");
+await addCol("buyer_requests","rejection_reason","TEXT");
+await addCol("buyer_requests","version","INT DEFAULT 1");
+
+// CHAT MESSAGES
+await addCol("chat_messages","version","INT DEFAULT 1");
+
+// If tables don't exist yet, create them
+if (!schemaExists) {
 await client.query("BEGIN");
 
     // ── Extensions ───────────────────────────────────────────────────────────
@@ -50,24 +154,11 @@ await client.query("BEGIN");
       avg_response_hours NUMERIC(6,2) DEFAULT NULL,
       avg_rating NUMERIC(3,2) DEFAULT NULL,
       review_count INT DEFAULT 0,
+      total_listings_posted INT DEFAULT 0,
+      version INT DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
-
-    // Safe column additions for existing databases
-    const addCol = (tbl, col, def) =>
-      client.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS ${col} ${def}`).catch(()=>{});
-
-    await addCol("users","google_id","VARCHAR(100)");
-    await addCol("users","last_seen","TIMESTAMPTZ");
-    await addCol("users","is_online","BOOLEAN DEFAULT FALSE");
-    await addCol("users","email_verify_token","VARCHAR(64)");
-    await addCol("users","email_verify_expires","TIMESTAMPTZ");
-    await addCol("users","response_rate","NUMERIC(5,2) DEFAULT NULL");
-    await addCol("users","avg_response_hours","NUMERIC(6,2) DEFAULT NULL");
-    await addCol("users","avg_rating","NUMERIC(3,2) DEFAULT NULL");
-    await addCol("users","review_count","INT DEFAULT 0");
-    await addCol("users","admin_level","VARCHAR(20) DEFAULT NULL");
 
     // ── LISTINGS ──────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS listings (
@@ -95,27 +186,6 @@ await client.query("BEGIN");
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
-
-    await addCol("listings","listing_anon_tag","VARCHAR(20)");
-    await addCol("listings","unlocked_at","TIMESTAMPTZ");
-    await addCol("listings","county","VARCHAR(60)");
-    await addCol("listings","expires_at","TIMESTAMPTZ DEFAULT NOW() + INTERVAL '75 days'");
-    await addCol("listings","expiry_warned","BOOLEAN DEFAULT FALSE");
-    await addCol("listings","moderation_note","TEXT");
-    await addCol("listings","reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
-    await addCol("listings","reviewed_at","TIMESTAMPTZ");
-    await addCol("listings","moderation_reviewed_at","TIMESTAMPTZ");
-    await addCol("listings","moderation_reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
-    await addCol("listings","is_contact_public","BOOLEAN DEFAULT FALSE");
-    await addCol("listings","subcat","VARCHAR(80)");
-    await addCol("listings","payment_expires_at","TIMESTAMPTZ");
-    await addCol("listings","sold_at","TIMESTAMPTZ");
-    await addCol("listings","sold_channel","VARCHAR(30)");
-    await addCol("listings","precise_location","TEXT");
-    // NOTE: linked_request_id added AFTER buyer_requests table is created (below)
-
-    // Backfill expires_at for existing listings that don't have one
-    await client.query(`UPDATE listings SET expires_at = created_at + INTERVAL '75 days' WHERE expires_at IS NULL`).catch(()=>{});
 
     // ── LISTING REPORTS ───────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS listing_reports (
@@ -169,23 +239,13 @@ await client.query("BEGIN");
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
-    await addCol("payments","amount_kes","NUMERIC(12,2)");
-    await addCol("payments","till_number","VARCHAR(20) DEFAULT '5673935'");
-    await addCol("payments","voucher_code","VARCHAR(30)");
-    // Columns the code actually uses (migration originally used different names)
-    await addCol("payments","type","VARCHAR(30)");
-    await addCol("payments","mpesa_phone","VARCHAR(20)");
-    await addCol("payments","mpesa_checkout_id","VARCHAR(100)");
-    await addCol("payments","stk_push_sent_at","TIMESTAMPTZ");
-    await addCol("payments","confirmed_at","TIMESTAMPTZ");
-
     // ── ESCROWS ───────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS escrows (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       listing_id UUID REFERENCES listings(id) ON DELETE SET NULL,
       buyer_id UUID REFERENCES users(id) ON DELETE SET NULL,
-seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  amount_kes NUMERIC(12,2),
+      seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      amount_kes NUMERIC(12,2),
       platform_fee NUMERIC(12,2) DEFAULT 0,
       status VARCHAR(30) DEFAULT 'holding',
       buyer_confirmed BOOLEAN DEFAULT FALSE,
@@ -197,13 +257,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
-
-    // Columns the code actually uses for escrow (migration originally used different names)
-    await addCol("escrows","payment_id","UUID REFERENCES payments(id) ON DELETE SET NULL");
-    await addCol("escrows","item_amount","NUMERIC(12,2)");
-    await addCol("escrows","fee_amount","NUMERIC(12,2)");
-    await addCol("escrows","total_amount","NUMERIC(12,2)");
-    await addCol("escrows","buyer_confirmed_at","TIMESTAMPTZ");
 
     // ── DISPUTES ──────────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS disputes (
@@ -217,8 +270,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       resolution TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
-
-    await addCol("disputes","admin_alerted_at","TIMESTAMPTZ");
 
     // ── CHAT MESSAGES ─────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS chat_messages (
@@ -244,10 +295,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
-    await addCol("chat_violations","reviewed","BOOLEAN DEFAULT FALSE");
-    await addCol("chat_violations","reviewed_by","UUID REFERENCES users(id) ON DELETE SET NULL");
-    await addCol("chat_violations","reviewed_at","TIMESTAMPTZ");
-
     // ── NOTIFICATIONS ─────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS notifications (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -260,7 +307,7 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
 
-    // ── PUSH TOKENS (for mobile app notifications) ────────────────────────────
+    // ── PUSH TOKENS ──────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS user_push_tokens (
       user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       push_token VARCHAR(255) NOT NULL,
@@ -282,11 +329,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_by UUID REFERENCES users(id),
       created_at TIMESTAMPTZ DEFAULT NOW()
     );`);
-
-    // Voucher columns the code uses (migration originally used different names)
-    await addCol("vouchers","active","BOOLEAN DEFAULT TRUE");
-    await addCol("vouchers","discount_percent","INT DEFAULT 0");
-    await addCol("vouchers","description","TEXT");
 
     // ── PRICE OFFERS ──────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS price_offers (
@@ -311,14 +353,11 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(listing_id, reviewer_id)
     );`);
-
-    // reviewee_id is what the code uses; reviewed_user_id is what the original migration used
-    await addCol("reviews","reviewee_id","UUID REFERENCES users(id) ON DELETE CASCADE");
     await client.query(`CREATE INDEX IF NOT EXISTS idx_reviews_reviewed ON reviews(reviewed_user_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_reviews_reviewee ON reviews(reviewee_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_reviews_listing ON reviews(listing_id)`).catch(()=>{});
 
-    // ── BUYER REQUESTS (What Buyers Want) ─────────────────────────────────────
+    // ── BUYER REQUESTS ────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS buyer_requests (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -335,21 +374,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );`);
-
-    // Add new columns to existing buyer_requests (safe ALTER)
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS category VARCHAR(80)`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS subcat VARCHAR(80)`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS keywords TEXT`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS min_price NUMERIC(12,2)`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS max_price NUMERIC(12,2)`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS photos JSONB DEFAULT '[]'`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`).catch(()=>{});
-    await client.query(`ALTER TABLE buyer_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT`).catch(()=>{});
-
-    // Now safe to add FK column referencing buyer_requests
-    await addCol("listings","linked_request_id","UUID REFERENCES buyer_requests(id) ON DELETE SET NULL");
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_linked_req ON listings(linked_request_id) WHERE linked_request_id IS NOT NULL`).catch(()=>{});
 
     // ── SELLER PITCHES ────────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS seller_pitches (
@@ -370,8 +394,10 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
     await client.query(`CREATE INDEX IF NOT EXISTS idx_buyer_requests_category ON buyer_requests(category)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_seller_pitches_request ON seller_pitches(request_id)`).catch(()=>{});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_seller_pitches_seller ON seller_pitches(seller_id)`).catch(()=>{});
-    // pitch_id added after seller_pitches table exists
-    await addCol("payments","pitch_id","UUID REFERENCES seller_pitches(id) ON DELETE SET NULL");
+
+    // ── LINKED REQUEST FK (after buyer_requests exists) ───────────────────────
+    await addCol("listings","linked_request_id","UUID REFERENCES buyer_requests(id) ON DELETE SET NULL");
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_linked_req ON listings(linked_request_id) WHERE linked_request_id IS NOT NULL`).catch(()=>{});
 
     // ── PASSWORD HISTORY ──────────────────────────────────────────────────────
     await client.query(`CREATE TABLE IF NOT EXISTS password_history (
@@ -458,7 +484,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
     `).catch(()=>{});
 
     // ── ADMIN AUDIT LOG ───────────────────────────────────────────────────────
-    // Risk 10: tracks every admin action for accountability + breach detection
     await client.query(`CREATE TABLE IF NOT EXISTS admin_audit_log (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
       admin_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -474,7 +499,6 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
     await client.query(`CREATE INDEX IF NOT EXISTS idx_audit_created ON admin_audit_log(created_at DESC)`);
 
     // ── MAINTENANCE MODE ──────────────────────────────────────────────────────
-    // Risk 5: single-row config table used to flip maintenance mode without redeployment
     await client.query(`CREATE TABLE IF NOT EXISTS platform_config (
       key VARCHAR(100) PRIMARY KEY,
       value TEXT,
@@ -484,73 +508,64 @@ seller_id UUID REFERENCES users(id) ON DELETE SET NULL,
     await client.query(`INSERT INTO platform_config (key,value) VALUES ('maintenance_mode','false') ON CONFLICT (key) DO NOTHING`);
     await client.query(`INSERT INTO platform_config (key,value) VALUES ('maintenance_message','We are performing scheduled maintenance. Back shortly.') ON CONFLICT (key) DO NOTHING`);
 
-    // ── NEW SELLER TRACKING ────────────────────────────────────────────────────
-    // Risk 3: track seller listing count so frontend can warn buyers about new sellers
-    await addCol("users","total_listings_posted","INT DEFAULT 0");
+    // ── OPTIMISTIC LOCKING INDEXES ────────────────────────────────────────────
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_version ON listings(version) WHERE version IS NOT NULL`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_payments_version ON payments(version) WHERE version IS NOT NULL`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_escrows_version ON escrows(version) WHERE version IS NOT NULL`).catch(()=>{});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_version ON users(version) WHERE version IS NOT NULL`).catch(()=>{});
 
-// ── ADMIN UNLOCK DISCOUNT ──────────────────────────────────────────────────
-// Admin can grant a KSh discount (or full free unlock) on the KSh 250 unlock fee
-await addCol("listings","unlock_discount","INT DEFAULT 0");
+    // Backfill version=1
+    await client.query(`UPDATE users SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE listings SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE payments SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE escrows SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE reviews SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE buyer_requests SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE seller_pitches SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE vouchers SET version=1 WHERE version IS NULL`).catch(()=>{});
+    await client.query(`UPDATE chat_messages SET version=1 WHERE version IS NULL`).catch(()=>{});
 
-// ── OPTIMISTIC LOCKING VERSION COLUMNS ─────────────────────────────────────
-// Risk 7: Add version columns for optimistic locking to prevent lost updates
-await addCol("users","version","INT DEFAULT 1");
-await addCol("listings","version","INT DEFAULT 1");
-await addCol("payments","version","INT DEFAULT 1");
-await addCol("escrows","version","INT DEFAULT 1");
-await addCol("reviews","version","INT DEFAULT 1");
-await addCol("buyer_requests","version","INT DEFAULT 1");
-await addCol("seller_pitches","version","INT DEFAULT 1");
-await addCol("vouchers","version","INT DEFAULT 1");
-await addCol("chat_messages","version","INT DEFAULT 1");
+    await client.query("COMMIT");
+    console.log("✅ Full schema migration complete");
+} else {
+  // Schema exists — just ensure version columns are backfilled
+  await client.query(`UPDATE users SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE listings SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE payments SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE escrows SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE reviews SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE buyer_requests SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE seller_pitches SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE vouchers SET version=1 WHERE version IS NULL`).catch(()=>{});
+  await client.query(`UPDATE chat_messages SET version=1 WHERE version IS NULL`).catch(()=>{});
+  console.log("✅ Column additions complete");
+}
 
-// Indexes for optimistic locking version checks (helps PostgreSQL reuse query plans)
-await client.query(`CREATE INDEX IF NOT EXISTS idx_listings_version ON listings(version) WHERE version IS NOT NULL`).catch(()=>{});
-await client.query(`CREATE INDEX IF NOT EXISTS idx_payments_version ON payments(version) WHERE version IS NOT NULL`).catch(()=>{});
-await client.query(`CREATE INDEX IF NOT EXISTS idx_escrows_version ON escrows(version) WHERE version IS NOT NULL`).catch(()=>{});
-await client.query(`CREATE INDEX IF NOT EXISTS idx_users_version ON users(version) WHERE version IS NOT NULL`).catch(()=>{});
-
-// Backfill version=1 for existing rows that don't have one
-await client.query(`UPDATE users SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE listings SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE payments SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE escrows SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE reviews SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE buyer_requests SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE seller_pitches SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE vouchers SET version=1 WHERE version IS NULL`).catch(()=>{});
-await client.query(`UPDATE chat_messages SET version=1 WHERE version IS NULL`).catch(()=>{});
-
-await client.query("COMMIT");
-    console.log(" DB migration complete");
-
-    // ── Admin seed (runs OUTSIDE main transaction so failures don't abort migration) ──
-    // Set ADMIN_SEED_EMAIL + ADMIN_SEED_PASSWORD in Railway env vars to create/reset admin.
-    // Remove them after the admin is working.
-    if (process.env.ADMIN_SEED_EMAIL && process.env.ADMIN_SEED_PASSWORD) {
-      try {
-        const bcrypt = require("bcryptjs");
-        const hash = await bcrypt.hash(process.env.ADMIN_SEED_PASSWORD, 12);
-        await pool.query(
-          `INSERT INTO users (name, email, password_hash, role, anon_tag, is_verified, admin_level)
-           VALUES ('Admin', $1, $2, 'admin', 'AdminWekaSoko01', true, 'super')
-           ON CONFLICT (email) DO UPDATE SET
-             role='admin', password_hash=$2, is_verified=true, admin_level='super',
-             is_suspended=false, account_status='active', updated_at=NOW()`,
-          [process.env.ADMIN_SEED_EMAIL, hash]
-        );
-        console.log(` Admin account ready: ${process.env.ADMIN_SEED_EMAIL}`);
-      } catch (e) {
-        console.error(" Admin seed failed:", e.message);
-      }
-    }
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error(" Migration failed:", err.message);
-    throw err;
-  } finally {
-    client.release();
+// ── Admin seed (runs OUTSIDE main transaction) ──────────────────────────────
+if (process.env.ADMIN_SEED_EMAIL && process.env.ADMIN_SEED_PASSWORD) {
+  try {
+    const bcrypt = require("bcryptjs");
+    const hash = await bcrypt.hash(process.env.ADMIN_SEED_PASSWORD, 12);
+    await pool.query(
+      `INSERT INTO users (name, email, password_hash, role, anon_tag, is_verified, admin_level)
+       VALUES ('Admin', $1, $2, 'admin', 'AdminWekaSoko01', true, 'super')
+       ON CONFLICT (email) DO UPDATE SET
+         role='admin', password_hash=$2, is_verified=true, admin_level='super',
+         is_suspended=false, account_status='active', updated_at=NOW()`,
+      [process.env.ADMIN_SEED_EMAIL, hash]
+    );
+    console.log(`✅ Admin account ready: ${process.env.ADMIN_SEED_EMAIL}`);
+  } catch (e) {
+    console.error("❌ Admin seed failed:", e.message);
   }
+}
+
+} catch (err) {
+console.error("❌ Migration failed:", err.message);
+throw err;
+} finally {
+client.release();
+}
 }
 
 module.exports = { runMigration };
